@@ -14,6 +14,7 @@
 #include "ModCoreEvents.h"
 #include "HRZ2/RTTIScanner.h"
 #include "SupercellDecoys.h"
+#include "SupercellTrace.h"
 
 ModCoreEvents::ValuePatchVisitor::ValuePatchVisitor(const RTTIValuePatch& Patch)
 {
@@ -542,6 +543,7 @@ void ModCoreEvents::OnFinishLoadGroup(const HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRefO
 		spdlog::info("OnFinishLoadGroup");
 
 	SupercellDecoys::ApplyPending();
+	SupercellTrace::TryInstall();
 }
 
 void ModCoreEvents::OnBeforeUnloadGroup(const HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRefObject>>& Objects)

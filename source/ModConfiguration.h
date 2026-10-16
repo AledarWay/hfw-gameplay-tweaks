@@ -29,6 +29,7 @@ namespace InternalModConfig
 		std::string GraphScanKeywords;
 		std::string SupercellFactDecoys;
 		bool SupercellDecoysEarly;
+		bool SupercellTrace;
 
 		// [Gameplay]
 		bool UnlockMapBoundaries;
