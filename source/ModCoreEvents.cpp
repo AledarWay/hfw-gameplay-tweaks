@@ -488,7 +488,7 @@ void ModCoreEvents::RegisterHardcodedPatches()
 	RegisterCacheCallback("GraphProgramResource", m_CachedGraphPrograms);
 
 	addCallback(
-		GGUUID::Parse("A2B86AD8-DAF9-303A-9C03-9F24E58D612E"), // SuperCellScriptContainer NodeConstantsResource
+		RTTI::FindTypeByName("NodeConstantsResource"),
 		[](auto& Object)
 		{
 			SupercellDecoys::OnHolderLoaded(Object.GetPtr());

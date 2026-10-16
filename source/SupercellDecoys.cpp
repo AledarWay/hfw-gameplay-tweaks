@@ -2,6 +2,7 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <algorithm>
 #include <vector>
 #include "HRZ2/Core/ProgramResource.h"
 #include "HRZ2/Core/RTTI.h"
@@ -17,9 +18,17 @@ namespace SupercellDecoys
 	{
 		constexpr auto QuestStateDefinitionUUID = GGUUID::Parse("F672389F-F41B-D84F-8225-55DB636498CD");
 
+		// NodeConstantsResources of SuperCellScriptContainer, the supercell LocalWeather effect graph and the
+		// SuperCellAnimationUpdateGraph (SupercellAetherLimiter)
+		constexpr GGUUID HolderUUIDs[] = {
+			GGUUID::Parse("A2B86AD8-DAF9-303A-9C03-9F24E58D612E"),
+			GGUUID::Parse("04C698DE-1BD3-CF35-8912-0F9EB2AA7173"),
+			GGUUID::Parse("587FDEED-9E78-5134-BF54-7D5CFFEB2E18"),
+		};
+
 		std::mutex g_Mutex;
-		RTTIRefObject *g_Holder = nullptr;
-		bool g_Pending = false;
+		std::vector<RTTIRefObject *> g_Holders;
+		std::vector<RTTIRefObject *> g_Pending;
 
 		struct Rule
 		{
@@ -91,12 +100,12 @@ namespace SupercellDecoys
 			return rules;
 		}
 
-		const Rule *FindRule(const std::vector<Rule>& Rules, RTTIRefObject *Fact, int Slot, bool IsQuestState)
+		const Rule *FindRule(const std::vector<Rule>& Rules, RTTIRefObject *Object, int Slot, bool IsFact, bool IsQuestState)
 		{
 			for (const auto& rule : Rules)
 			{
-				if ((rule.m_Fact && *rule.m_Fact == Fact->m_UUID) || (rule.m_AllQuestStates && IsQuestState) ||
-					(Slot >= rule.m_SlotFirst && Slot <= rule.m_SlotLast))
+				if ((rule.m_Fact && *rule.m_Fact == Object->m_UUID) || (rule.m_AllQuestStates && IsQuestState) ||
+					(IsFact && Slot >= rule.m_SlotFirst && Slot <= rule.m_SlotLast))
 					return &rule;
 			}
 
@@ -167,6 +176,48 @@ namespace SupercellDecoys
 			return definition && definition->m_UUID == QuestStateDefinitionUUID;
 		}
 
+		// "@UUID" values swap the link for another loaded object. Only enum entries are searched for now.
+		RTTIRefObject *FindReplacement(const Array<Ref<RTTIRefObject>>& List, const GGUUID& Target)
+		{
+			auto searchDefinition = [&](RTTIRefObject *Definition) -> RTTIRefObject *
+			{
+				if (!Definition)
+					return nullptr;
+
+				for (auto& entry : Definition->GetMemberRefUnsafe<Array<Ref<RTTIRefObject>>>("EnumValues"))
+				{
+					if (entry.GetPtr() && entry->m_UUID == Target)
+						return entry.GetPtr();
+				}
+
+				return nullptr;
+			};
+
+			for (size_t i = 0; i < List.size(); i++)
+			{
+				const auto obj = List[i].GetPtr();
+
+				if (!obj)
+					continue;
+
+				if (obj->m_UUID == Target)
+					return obj;
+
+				const auto typeName = obj->GetRTTI()->GetSymbolName();
+				RTTIRefObject *found = nullptr;
+
+				if (typeName == "EnumFactDefinition")
+					found = searchDefinition(obj);
+				else if (typeName == "EnumFact")
+					found = searchDefinition(obj->GetMemberRefUnsafe<Ref<RTTIRefObject>>("EnumDefinition").GetPtr());
+
+				if (found)
+					return found;
+			}
+
+			return nullptr;
+		}
+
 		void Apply(RTTIRefObject *Holder)
 		{
 			const auto rules = ParseRules();
@@ -176,23 +227,35 @@ namespace SupercellDecoys
 
 			for (size_t i = 0; i < list.size(); i++)
 			{
-				const auto fact = list[i].GetPtr();
+				const auto obj = list[i].GetPtr();
 
-				if (!fact)
+				if (!obj)
 					continue;
 
-				const auto typeName = fact->GetRTTI()->GetSymbolName();
+				const auto typeName = obj->GetRTTI()->GetSymbolName();
+				const bool isFact = typeName.ends_with("Fact");
+				const bool questState = IsQuestStateFact(obj);
+				const auto rule = FindRule(rules, obj, static_cast<int>(i), isFact, questState);
+				std::string status;
 
-				if (!typeName.ends_with("Fact"))
-					continue;
-
-				const bool questState = IsQuestStateFact(fact);
-				const auto rule = FindRule(rules, fact, static_cast<int>(i), questState);
-				const char *status = "";
-
-				if (rule && !std::format("{}", fact->m_UUID).starts_with("DEC0"))
+				if (rule && !std::format("{}", obj->m_UUID).starts_with("DEC0"))
 				{
-					if (auto decoy = MakeDecoy(fact, rule->m_Value); decoy.GetPtr())
+					if (rule->m_Value.starts_with('@'))
+					{
+						const auto target = GGUUID::TryParse(std::string_view(rule->m_Value).substr(1));
+						const auto replacement = target ? FindReplacement(list, *target) : nullptr;
+
+						if (replacement)
+						{
+							list[i] = replacement;
+							status = std::format(" -> SWAPPED to {}", replacement->m_UUID);
+						}
+						else
+						{
+							status = " -> swap target not found";
+						}
+					}
+					else if (auto decoy = MakeDecoy(obj, rule->m_Value); decoy.GetPtr())
 					{
 						list[i] = decoy;
 						status = " -> DECOY";
@@ -207,7 +270,7 @@ namespace SupercellDecoys
 					"  #{} {} {}{}{}{}",
 					i,
 					typeName,
-					fact->m_UUID,
+					obj->m_UUID,
 					questState ? " [quest state]" : "",
 					rule ? std::format(" rule '{}'", rule->m_Value) : "",
 					status);
@@ -217,21 +280,21 @@ namespace SupercellDecoys
 
 	void OnHolderLoaded(RTTIRefObject *Holder)
 	{
+		if (std::ranges::find(HolderUUIDs, Holder->m_UUID) == std::end(HolderUUIDs))
+			return;
+
 		std::scoped_lock lock(g_Mutex);
 
-		g_Holder = Holder;
-		g_Pending = true;
+		g_Holders.emplace_back(Holder);
+		g_Pending.emplace_back(Holder);
 	}
 
 	void OnHolderUnloaded(RTTIRefObject *Holder)
 	{
 		std::scoped_lock lock(g_Mutex);
 
-		if (g_Holder == Holder)
-		{
-			g_Holder = nullptr;
-			g_Pending = false;
-		}
+		std::erase(g_Holders, Holder);
+		std::erase(g_Pending, Holder);
 	}
 
 	// Called after a load group finishes, when cross-file references should be resolved
@@ -239,24 +302,22 @@ namespace SupercellDecoys
 	{
 		std::scoped_lock lock(g_Mutex);
 
-		if (!g_Pending || !g_Holder)
-			return;
+		for (auto holder : g_Pending)
+			Apply(holder);
 
-		g_Pending = false;
-		Apply(g_Holder);
+		g_Pending.clear();
 	}
 
 	void ApplyNow()
 	{
 		std::scoped_lock lock(g_Mutex);
 
-		if (!g_Holder)
-		{
-			spdlog::warn("Supercell decoys: SuperCellScriptContainer constants are not loaded");
-			return;
-		}
+		if (g_Holders.empty())
+			spdlog::warn("Supercell decoys: no supercell constants are loaded");
 
-		g_Pending = false;
-		Apply(g_Holder);
+		for (auto holder : g_Holders)
+			Apply(holder);
+
+		g_Pending.clear();
 	}
 }
