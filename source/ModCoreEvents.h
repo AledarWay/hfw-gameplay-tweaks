@@ -57,6 +57,8 @@ public:
 	std::unordered_set<HRZ2::RTTIRefObject *> m_CachedAIFactions;
 	std::unordered_set<HRZ2::RTTIRefObject *> m_CachedSpawnSetups;
 	std::unordered_set<HRZ2::RTTIRefObject *> m_CachedWeatherSetups;
+	std::unordered_set<HRZ2::RTTIRefObject *> m_CachedLocalWeathers;
+	std::unordered_set<HRZ2::RTTIRefObject *> m_CachedWeatherSystems;
 	std::unordered_set<HRZ2::RTTIRefObject *> m_CachedInventoryItems;
 	float m_CachedLODRangeModifierHack = std::numeric_limits<float>::max();
 

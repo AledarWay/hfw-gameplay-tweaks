@@ -21,6 +21,7 @@
 #include "MainMenuBar.h"
 #include "PlayerInventoryWindow.h"
 #include "WeatherSetupWindow.h"
+#include "LocalWeatherWindow.h"
 
 namespace HRZ2::DebugUI
 {
@@ -295,6 +296,9 @@ namespace HRZ2::DebugUI
 
 		if (ImGui::MenuItem("Weather Setup..."))
 			AddWindow(std::make_shared<WeatherSetupWindow>());
+
+		if (ImGui::MenuItem("Local Weather (Supercells)..."))
+			AddWindow(std::make_shared<LocalWeatherWindow>());
 
 		ImGui::MenuItem("##sep2", nullptr, nullptr, false);
 		ImGui::MenuItem("Simulate Game Completed", nullptr, &debugSettings->m_SPAllUnlocked);

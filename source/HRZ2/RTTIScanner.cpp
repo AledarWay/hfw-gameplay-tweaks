@@ -141,6 +141,8 @@ namespace RTTIScanner
 			"WeatherSetup",
 			"WeatherSetupDLC",
 			"LocalWeatherSetup",
+			"LocalWeather",
+			"WeatherSystem",
 			"ClimateWeatherState",
 			"ProceduralCloudModelingSettings",
 			"WindSettingsResource",

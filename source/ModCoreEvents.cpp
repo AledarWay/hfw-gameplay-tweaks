@@ -482,6 +482,9 @@ void ModCoreEvents::RegisterHardcodedPatches()
 	RegisterCacheCallback("WeatherSetupDLC", m_CachedWeatherSetups);
 	RegisterCacheCallback("LocalWeatherSetup", m_CachedWeatherSetups);
 
+	RegisterCacheCallback("LocalWeather", m_CachedLocalWeathers);
+	RegisterCacheCallback("WeatherSystem", m_CachedWeatherSystems);
+
 	RegisterCacheCallback("InventoryItemResource", m_CachedInventoryItems);
 
 #undef RegisterCacheCallback
