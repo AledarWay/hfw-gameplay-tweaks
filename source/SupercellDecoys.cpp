@@ -287,6 +287,13 @@ namespace SupercellDecoys
 
 		g_Holders.emplace_back(Holder);
 		g_Pending.emplace_back(Holder);
+
+		// Graph instances may copy their links before the group finishes loading
+		if (ModConfiguration.SupercellDecoysEarly)
+		{
+			spdlog::info("Supercell decoys: early pass");
+			Apply(Holder);
+		}
 	}
 
 	void OnHolderUnloaded(RTTIRefObject *Holder)

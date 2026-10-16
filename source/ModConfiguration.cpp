@@ -125,6 +125,7 @@ namespace InternalModConfig
 			PARSE_TOML_MEMBER(general, AssetDumpDepth);
 			PARSE_TOML_MEMBER(general, GraphScanKeywords);
 			PARSE_TOML_MEMBER(general, SupercellFactDecoys);
+			PARSE_TOML_MEMBER(general, SupercellDecoysEarly);
 		}
 
 		if (o.DebugMenuFontScale <= 0.0f)
