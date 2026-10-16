@@ -123,6 +123,7 @@ namespace InternalModConfig
 			PARSE_TOML_MEMBER(general, DebugMenuFontScale);
 			PARSE_TOML_MEMBER(general, AssetDumpTypes);
 			PARSE_TOML_MEMBER(general, AssetDumpDepth);
+			PARSE_TOML_MEMBER(general, GraphScanKeywords);
 		}
 
 		if (o.DebugMenuFontScale <= 0.0f)

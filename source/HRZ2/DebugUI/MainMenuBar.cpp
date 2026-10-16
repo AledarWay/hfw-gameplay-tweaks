@@ -22,6 +22,7 @@
 #include "PlayerInventoryWindow.h"
 #include "WeatherSetupWindow.h"
 #include "LocalWeatherWindow.h"
+#include "../GraphScanner.h"
 
 namespace HRZ2::DebugUI
 {
@@ -343,6 +344,9 @@ namespace HRZ2::DebugUI
 
 			spdlog::info("Dumped {} weather setups to asset_dump.txt", setups.size());
 		}
+
+		if (ImGui::MenuItem("Scan Graph Programs (graph_scan.txt)"))
+			GraphScanner::ScanCachedGraphPrograms();
 
 #if 0
 		if (ImGui::MenuItem("Dump Fullgame Typeinfo", nullptr, false, false))

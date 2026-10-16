@@ -28,9 +28,13 @@ namespace HRZ2
 		Array<ProgramParameter> m_Parameters;
 		char _pad0[0x10];
 		Array<Ref<RTTIRefObject>> m_DefaultSoftLinkedObjects;
-		char _pad1[0x38];
+		Array<Ref<RTTIRefObject>> m_DefaultHardLinkedObjects;
+		Array<GGUUID> m_DefaultUUIDRefs;
+		char _pad1[0x18];
 	};
 	assert_offset(ProgramParameterList, m_DefaultSoftLinkedObjects, 0x20);
+	assert_offset(ProgramParameterList, m_DefaultHardLinkedObjects, 0x30);
+	assert_offset(ProgramParameterList, m_DefaultUUIDRefs, 0x40);
 	static_assert(sizeof(ProgramParameterList) == 0x68);
 
 	class ProgramResourceEntryPoint

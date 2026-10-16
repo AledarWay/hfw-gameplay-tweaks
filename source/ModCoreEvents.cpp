@@ -484,6 +484,7 @@ void ModCoreEvents::RegisterHardcodedPatches()
 
 	RegisterCacheCallback("LocalWeather", m_CachedLocalWeathers);
 	RegisterCacheCallback("WeatherSystem", m_CachedWeatherSystems);
+	RegisterCacheCallback("GraphProgramResource", m_CachedGraphPrograms);
 
 	RegisterCacheCallback("InventoryItemResource", m_CachedInventoryItems);
 

@@ -26,6 +26,7 @@ namespace InternalModConfig
 		float DebugMenuFontScale;
 		std::string AssetDumpTypes;
 		int AssetDumpDepth;
+		std::string GraphScanKeywords;
 
 		// [Gameplay]
 		bool UnlockMapBoundaries;
