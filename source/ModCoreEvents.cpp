@@ -506,7 +506,9 @@ void ModCoreEvents::DumpObject(HRZ2::RTTIRefObject *Object, const char *Reason)
 
 	std::scoped_lock lock(m_AssetDumpMutex);
 
-	if (auto f = _wfopen(InternalModConfig::GetModRelativePath("asset_dump.txt").c_str(), L"ab"))
+	FILE *f = nullptr;
+
+	if (_wfopen_s(&f, InternalModConfig::GetModRelativePath("asset_dump.txt").c_str(), L"ab") == 0 && f)
 	{
 		auto header = std::format("==== [{}] {} {}\n", Reason, rtti->GetSymbolName(), Object->m_UUID);
 		fwrite(header.data(), 1, header.size(), f);
