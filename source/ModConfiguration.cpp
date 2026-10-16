@@ -121,6 +121,8 @@ namespace InternalModConfig
 			PARSE_TOML_MEMBER(general, EnableAssetLogging);
 			PARSE_TOML_MEMBER(general, EnableAssetOverrides);
 			PARSE_TOML_MEMBER(general, DebugMenuFontScale);
+			PARSE_TOML_MEMBER(general, AssetDumpTypes);
+			PARSE_TOML_MEMBER(general, AssetDumpDepth);
 		}
 
 		if (o.DebugMenuFontScale <= 0.0f)

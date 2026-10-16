@@ -1,3 +1,4 @@
+#include <shared_mutex>
 #include <algorithm>
 #include <imgui.h>
 #include <Windows.h>
@@ -312,6 +313,31 @@ namespace HRZ2::DebugUI
 		{
 			RTTIYamlExporter exporter(RTTIScanner::GetAllTypes());
 			exporter.ExportRTTITypes(".");
+		}
+
+		// The offset scan above is disabled in release builds; this one works from loaded assets
+		if (ImGui::MenuItem("Dump Observed RTTI Structures"))
+		{
+			const auto types = RTTIScanner::CollectObservedTypes();
+			RTTIYamlExporter exporter(types);
+			exporter.ExportRTTITypes(".");
+			spdlog::info("Dumped {} RTTI types to Decima.HFW.RTTI.yaml", types.size());
+		}
+
+		// Includes LocalWeatherSetup objects that were loaded before the menu was opened
+		if (ImGui::MenuItem("Dump Cached Weather Setups"))
+		{
+			auto& events = ModCoreEvents::GetInstance();
+			std::vector<Ref<RTTIRefObject>> setups;
+			{
+				std::shared_lock lock(events.m_CachedDataMutex);
+				setups.assign(events.m_CachedWeatherSetups.begin(), events.m_CachedWeatherSetups.end());
+			}
+
+			for (auto& setup : setups)
+				events.DumpObject(setup.GetPtr(), "cached");
+
+			spdlog::info("Dumped {} weather setups to asset_dump.txt", setups.size());
 		}
 
 #if 0

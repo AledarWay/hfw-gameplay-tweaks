@@ -14,4 +14,8 @@ namespace RTTIScanner
 	void ScanForRTTIStructures();
 	void RegisterTypeInfoRecursively(const HRZ2::RTTI *Info);
 	void RegisterRTTIStructures();
+
+	// Alternative to the offset-based scan: types seen at runtime plus known names, expanded recursively
+	void AddObservedType(const HRZ2::RTTI *Info);
+	std::unordered_set<const HRZ2::RTTI *> CollectObservedTypes();
 }

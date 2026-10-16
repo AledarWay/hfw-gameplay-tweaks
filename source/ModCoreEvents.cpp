@@ -1,3 +1,6 @@
+#include <algorithm>
+#include <cctype>
+#include <cstdio>
 #include <format>
 #include <ranges>
 #include <shared_mutex>
@@ -9,6 +12,7 @@
 #include "HRZ2/Core/RTTIRefObject.h"
 #include "ModConfiguration.h"
 #include "ModCoreEvents.h"
+#include "HRZ2/RTTIScanner.h"
 
 ModCoreEvents::ValuePatchVisitor::ValuePatchVisitor(const RTTIValuePatch& Patch)
 {
@@ -28,6 +32,17 @@ HRZ2::RTTIObjectTweaker::SetValueVisitor::EMode ModCoreEvents::ValuePatchVisitor
 
 ModCoreEvents::ModCoreEvents()
 {
+	// Comma-separated, case-insensitive substrings of RTTI type names
+	for (const auto& part : ModConfiguration.AssetDumpTypes | std::views::split(','))
+	{
+		std::string filter { std::string_view(part) };
+		std::erase_if(filter, [](unsigned char c) { return std::isspace(c); });
+		std::ranges::transform(filter, filter.begin(), [](unsigned char c) { return std::tolower(c); });
+
+		if (!filter.empty())
+			m_AssetDumpFilters.emplace_back(std::move(filter));
+	}
+
 	RegisterParsedPatches();
 	RegisterHardcodedPatches();
 }
@@ -472,6 +487,35 @@ void ModCoreEvents::RegisterHardcodedPatches()
 #undef RegisterCacheCallback
 }
 
+bool ModCoreEvents::ShouldDumpType(const std::string& TypeName) const
+{
+	if (m_AssetDumpFilters.empty())
+		return false;
+
+	std::string lowered(TypeName);
+	std::ranges::transform(lowered, lowered.begin(), [](unsigned char c) { return std::tolower(c); });
+
+	return std::ranges::any_of(m_AssetDumpFilters, [&](const auto& f) { return lowered.find(f) != std::string::npos; });
+}
+
+void ModCoreEvents::DumpObject(HRZ2::RTTIRefObject *Object, const char *Reason)
+{
+	const auto rtti = Object->GetRTTI();
+	const auto depth = static_cast<size_t>(std::clamp(ModConfiguration.AssetDumpDepth, 1, 8));
+	const auto text = rtti->AsCompound()->SerializeObject(Object, depth).value_or("<FAILED>");
+
+	std::scoped_lock lock(m_AssetDumpMutex);
+
+	if (auto f = _wfopen(InternalModConfig::GetModRelativePath("asset_dump.txt").c_str(), L"ab"))
+	{
+		auto header = std::format("==== [{}] {} {}\n", Reason, rtti->GetSymbolName(), Object->m_UUID);
+		fwrite(header.data(), 1, header.size(), f);
+		fwrite(text.data(), 1, text.size(), f);
+		fwrite("\n\n", 1, 2, f);
+		fclose(f);
+	}
+}
+
 void ModCoreEvents::OnFinishLoadGroup(const HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRefObject>>& Objects)
 {
 	if (ModConfiguration.EnableAssetLogging)
@@ -506,6 +550,12 @@ void ModCoreEvents::OnLoadAssetGroup(const HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRefOb
 
 		if (ModConfiguration.EnableAssetLogging)
 			spdlog::debug("Asset {}: {}", object->m_UUID, rtti->GetSymbolName());
+
+		RTTIScanner::AddObservedType(rtti);
+
+		// Dump before patches so the file shows original values
+		if (ShouldDumpType(rtti->GetSymbolName()))
+			DumpObject(object.GetPtr(), "load");
 
 		// Apply all patches loaded from user config
 		auto visitAll = [&](const auto& Entries)

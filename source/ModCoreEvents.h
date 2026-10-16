@@ -1,5 +1,6 @@
 #pragma once
 
+#include <mutex>
 #include <unordered_set>
 #include "HRZ2/Core/IStreamingSystem.h"
 #include "HRZ2/Core/RTTIObjectTweaker.h"
@@ -47,6 +48,10 @@ private:
 	std::optional<HRZ2::GGUUID> m_CharacterOverrideRootUUID;
 	std::optional<HRZ2::GGUUID> m_CharacterOverrideVariantUUID;
 
+	// Asset dumping
+	std::vector<std::string> m_AssetDumpFilters;
+	std::mutex m_AssetDumpMutex;
+
 public:
 	HRZ2::SharedMutex m_CachedDataMutex;
 	std::unordered_set<HRZ2::RTTIRefObject *> m_CachedAIFactions;
@@ -61,6 +66,9 @@ public:
 
 	void RegisterParsedPatches();
 	void RegisterHardcodedPatches();
+
+	bool ShouldDumpType(const std::string& TypeName) const;
+	void DumpObject(HRZ2::RTTIRefObject *Object, const char *Reason);
 
 	virtual void OnFinishLoadGroup(const HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRefObject>>& Objects) override;
 	virtual void OnBeforeUnloadGroup(const HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRefObject>>& Objects) override;

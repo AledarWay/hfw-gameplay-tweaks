@@ -24,6 +24,8 @@ namespace InternalModConfig
 		bool EnableAssetLogging;
 		bool EnableAssetOverrides;
 		float DebugMenuFontScale;
+		std::string AssetDumpTypes;
+		int AssetDumpDepth;
 
 		// [Gameplay]
 		bool UnlockMapBoundaries;

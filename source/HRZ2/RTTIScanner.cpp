@@ -1,3 +1,4 @@
+#include <mutex>
 #include "Core/RTTI.h"
 #include "RTTIScanner.h"
 
@@ -120,6 +121,57 @@ namespace RTTIScanner
 			RegisterTypeInfoRecursively(rtti);
 
 		ScannedRTTITypes.clear();
+	}
+
+	std::mutex ObservedTypesMutex;
+	std::unordered_set<const HRZ2::RTTI *> ObservedTypes;
+
+	void AddObservedType(const HRZ2::RTTI *Info)
+	{
+		if (!Info)
+			return;
+
+		std::scoped_lock lock(ObservedTypesMutex);
+		ObservedTypes.emplace(Info);
+	}
+
+	std::unordered_set<const HRZ2::RTTI *> CollectObservedTypes()
+	{
+		constexpr const char *knownTypeNames[] = {
+			"WeatherSetup",
+			"WeatherSetupDLC",
+			"LocalWeatherSetup",
+			"ClimateWeatherState",
+			"ProceduralCloudModelingSettings",
+			"WindSettingsResource",
+			"WeatherLimitsEventResource",
+			"BoolFactConditionResource",
+			"GraphConditionResource",
+			"BooleanFact",
+		};
+
+		std::unordered_set<const HRZ2::RTTI *> seeds;
+		{
+			std::scoped_lock lock(ObservedTypesMutex);
+			seeds = ObservedTypes;
+		}
+
+		for (auto name : knownTypeNames)
+		{
+			if (auto rtti = HRZ2::RTTI::FindTypeByName(name))
+				seeds.emplace(rtti);
+		}
+
+		// Reuse the recursive walker, then restore whatever the offset scan registered
+		auto previous = std::move(RegisteredRTTITypes);
+		RegisteredRTTITypes.clear();
+
+		for (auto rtti : seeds)
+			RegisterTypeInfoRecursively(rtti);
+
+		auto result = std::move(RegisteredRTTITypes);
+		RegisteredRTTITypes = std::move(previous);
+		return result;
 	}
 
 	DECLARE_HOOK_TRANSACTION(RTTIScanner)
