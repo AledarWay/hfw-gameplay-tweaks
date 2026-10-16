@@ -127,6 +127,7 @@ namespace InternalModConfig
 			PARSE_TOML_MEMBER(general, SupercellFactDecoys);
 			PARSE_TOML_MEMBER(general, SupercellDecoysEarly);
 			PARSE_TOML_MEMBER(general, SupercellTrace);
+			PARSE_TOML_MEMBER(general, KeepSupercellsAfterAether);
 		}
 
 		if (o.DebugMenuFontScale <= 0.0f)

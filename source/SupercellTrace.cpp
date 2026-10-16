@@ -138,11 +138,23 @@ namespace SupercellTrace
 		uint64_t (*g_SetInt)(void *, void *, int) = nullptr;
 		uint64_t (*g_SetFloat)(void *, void *, float) = nullptr;
 
+		// Set once the AETHER merge happens; the supercell scripts stop spawning storms while it reads true
+		constexpr auto SupercellsDisabledFact = GGUUID::Parse("E5E98601-17CB-644B-975B-E1EB6CB9571C");
+
 		bool HookGetBool(void *Context, void *Fact)
 		{
-			const auto result = g_GetBool(Context, Fact);
+			auto result = g_GetBool(Context, Fact);
+			const auto range = RangeName(_ReturnAddress());
 
-			if (auto range = RangeName(_ReturnAddress()))
+			if (!range)
+				return result;
+
+			GGUUID uuid {};
+
+			if (result && ModConfiguration.KeepSupercellsAfterAether && SafeReadUUID(Fact, &uuid) && uuid == SupercellsDisabledFact)
+				result = false;
+
+			if (ModConfiguration.SupercellTrace)
 				LogOnce(std::format("{} GetBool {} -> {}", range, Describe(Fact), result));
 
 			return result;
@@ -152,7 +164,7 @@ namespace SupercellTrace
 		{
 			const auto result = g_GetEnum(Context, Fact);
 
-			if (auto range = RangeName(_ReturnAddress()))
+			if (auto range = ModConfiguration.SupercellTrace ? RangeName(_ReturnAddress()) : nullptr)
 				LogOnce(std::format("{} GetEnum {} -> {}", range, Describe(Fact), Describe(result)));
 
 			return result;
@@ -160,7 +172,7 @@ namespace SupercellTrace
 
 		uint64_t HookSetBool(void *Context, void *Fact, bool Value)
 		{
-			if (auto range = RangeName(_ReturnAddress()))
+			if (auto range = ModConfiguration.SupercellTrace ? RangeName(_ReturnAddress()) : nullptr)
 				LogOnce(std::format("{} SetBool {} = {}", range, Describe(Fact), Value));
 
 			return g_SetBool(Context, Fact, Value);
@@ -168,7 +180,7 @@ namespace SupercellTrace
 
 		uint64_t HookSetEnum(void *Context, void *Fact, void *Value)
 		{
-			if (auto range = RangeName(_ReturnAddress()))
+			if (auto range = ModConfiguration.SupercellTrace ? RangeName(_ReturnAddress()) : nullptr)
 				LogOnce(std::format("{} SetEnum {} = {}", range, Describe(Fact), Describe(Value)));
 
 			return g_SetEnum(Context, Fact, Value);
@@ -176,7 +188,7 @@ namespace SupercellTrace
 
 		uint64_t HookSetInt(void *Context, void *Fact, int Value)
 		{
-			if (auto range = RangeName(_ReturnAddress()))
+			if (auto range = ModConfiguration.SupercellTrace ? RangeName(_ReturnAddress()) : nullptr)
 				LogOnce(std::format("{} SetInt {} = {}", range, Describe(Fact), Value));
 
 			return g_SetInt(Context, Fact, Value);
@@ -184,7 +196,7 @@ namespace SupercellTrace
 
 		uint64_t HookSetFloat(void *Context, void *Fact, float Value)
 		{
-			if (auto range = RangeName(_ReturnAddress()))
+			if (auto range = ModConfiguration.SupercellTrace ? RangeName(_ReturnAddress()) : nullptr)
 				LogOnce(std::format("{} SetFloat {} = {}", range, Describe(Fact), Value));
 
 			return g_SetFloat(Context, Fact, Value);
@@ -244,7 +256,7 @@ namespace SupercellTrace
 
 	void TryInstall()
 	{
-		if (!ModConfiguration.SupercellTrace || g_Installed.load())
+		if ((!ModConfiguration.SupercellTrace && !ModConfiguration.KeepSupercellsAfterAether) || g_Installed.load())
 			return;
 
 		const auto module = GetModuleHandleW(L"fullgame.dll");
@@ -274,16 +286,25 @@ namespace SupercellTrace
 				  SwapSlot(SlotSetBool, &HookSetBool, &g_SetBool) && SwapSlot(SlotSetEnum, &HookSetEnum, &g_SetEnum) &&
 				  SwapSlot(SlotSetInt, &HookSetInt, &g_SetInt) && SwapSlot(SlotSetFloat, &HookSetFloat, &g_SetFloat);
 
-		DetourTransactionBegin();
-		DetourUpdateThread(GetCurrentThread());
-
-		for (size_t i = 0; i < std::size(Handlers); i++)
+		if (ModConfiguration.SupercellTrace)
 		{
-			g_OriginalHandlers[i] = reinterpret_cast<HandlerFn>(g_Base + Handlers[i].m_Rva);
-			DetourAttach(reinterpret_cast<void **>(&g_OriginalHandlers[i]), reinterpret_cast<void *>(HandlerHooks[i]));
+			DetourTransactionBegin();
+			DetourUpdateThread(GetCurrentThread());
+
+			for (size_t i = 0; i < std::size(Handlers); i++)
+			{
+				g_OriginalHandlers[i] = reinterpret_cast<HandlerFn>(g_Base + Handlers[i].m_Rva);
+				DetourAttach(reinterpret_cast<void **>(&g_OriginalHandlers[i]), reinterpret_cast<void *>(HandlerHooks[i]));
+			}
+
+			ok = DetourTransactionCommit() == NO_ERROR && ok;
 		}
 
-		ok = DetourTransactionCommit() == NO_ERROR && ok;
-		spdlog::info("[trace] supercell tracing installed at {:#x}: {}", g_Base, ok ? "ok" : "PARTIAL");
+		spdlog::info(
+			"[supercells] hooks installed at {:#x}: {} (keep after AETHER: {}, trace: {})",
+			g_Base,
+			ok ? "ok" : "PARTIAL",
+			ModConfiguration.KeepSupercellsAfterAether,
+			ModConfiguration.SupercellTrace);
 	}
 }

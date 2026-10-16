@@ -30,6 +30,7 @@ namespace InternalModConfig
 		std::string SupercellFactDecoys;
 		bool SupercellDecoysEarly;
 		bool SupercellTrace;
+		bool KeepSupercellsAfterAether;
 
 		// [Gameplay]
 		bool UnlockMapBoundaries;
