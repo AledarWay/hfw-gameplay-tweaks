@@ -23,6 +23,7 @@
 #include "WeatherSetupWindow.h"
 #include "LocalWeatherWindow.h"
 #include "../GraphScanner.h"
+#include "../../SupercellDecoys.h"
 
 namespace HRZ2::DebugUI
 {
@@ -347,6 +348,9 @@ namespace HRZ2::DebugUI
 
 		if (ImGui::MenuItem("Scan Graph Programs (graph_scan.txt)"))
 			GraphScanner::ScanCachedGraphPrograms();
+
+		if (ImGui::MenuItem("Apply Supercell Fact Decoys"))
+			SupercellDecoys::ApplyNow();
 
 #if 0
 		if (ImGui::MenuItem("Dump Fullgame Typeinfo", nullptr, false, false))

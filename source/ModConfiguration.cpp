@@ -40,7 +40,7 @@ namespace InternalModConfig
 			auto debugUISink = std::make_shared<HRZ2::DebugUI::LogWindow::LogSink>();
 			sinks.emplace_back(std::move(debugUISink));
 
-			if constexpr (false)
+			if constexpr (true)
 			{
 				auto logFileSink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(GetModRelativePath("mod_log.txt").string(), true);
 				sinks.emplace_back(std::move(logFileSink));
@@ -124,6 +124,7 @@ namespace InternalModConfig
 			PARSE_TOML_MEMBER(general, AssetDumpTypes);
 			PARSE_TOML_MEMBER(general, AssetDumpDepth);
 			PARSE_TOML_MEMBER(general, GraphScanKeywords);
+			PARSE_TOML_MEMBER(general, SupercellFactDecoys);
 		}
 
 		if (o.DebugMenuFontScale <= 0.0f)

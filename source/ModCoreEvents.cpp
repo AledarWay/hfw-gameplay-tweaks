@@ -13,6 +13,7 @@
 #include "ModConfiguration.h"
 #include "ModCoreEvents.h"
 #include "HRZ2/RTTIScanner.h"
+#include "SupercellDecoys.h"
 
 ModCoreEvents::ValuePatchVisitor::ValuePatchVisitor(const RTTIValuePatch& Patch)
 {
@@ -486,6 +487,19 @@ void ModCoreEvents::RegisterHardcodedPatches()
 	RegisterCacheCallback("WeatherSystem", m_CachedWeatherSystems);
 	RegisterCacheCallback("GraphProgramResource", m_CachedGraphPrograms);
 
+	addCallback(
+		GGUUID::Parse("A2B86AD8-DAF9-303A-9C03-9F24E58D612E"), // SuperCellScriptContainer NodeConstantsResource
+		[](auto& Object)
+		{
+			SupercellDecoys::OnHolderLoaded(Object.GetPtr());
+		});
+	addUnloadCallback(
+		RTTI::FindTypeByName("NodeConstantsResource"),
+		[](auto& Object)
+		{
+			SupercellDecoys::OnHolderUnloaded(Object.GetPtr());
+		});
+
 	RegisterCacheCallback("InventoryItemResource", m_CachedInventoryItems);
 
 #undef RegisterCacheCallback
@@ -526,6 +540,8 @@ void ModCoreEvents::OnFinishLoadGroup(const HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRefO
 {
 	if (ModConfiguration.EnableAssetLogging)
 		spdlog::info("OnFinishLoadGroup");
+
+	SupercellDecoys::ApplyPending();
 }
 
 void ModCoreEvents::OnBeforeUnloadGroup(const HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRefObject>>& Objects)

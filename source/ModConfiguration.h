@@ -27,6 +27,7 @@ namespace InternalModConfig
 		std::string AssetDumpTypes;
 		int AssetDumpDepth;
 		std::string GraphScanKeywords;
+		std::string SupercellFactDecoys;
 
 		// [Gameplay]
 		bool UnlockMapBoundaries;
