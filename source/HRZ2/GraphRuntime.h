@@ -34,6 +34,7 @@ namespace HRZ2::GraphRuntime
 		std::optional<GGUUID> m_OnlyWhenEntry; // Enum only: apply just while the real value is this entry
 		double m_Position[3] = {};
 		bool m_PositionAxes[3] = { true, true, true }; // Axes left false keep the game's value
+		bool m_WriteBack = false; // Bool/Int/Float/Enum: also store the value in the real fact, so native code sees it
 	};
 
 	struct FactOverride

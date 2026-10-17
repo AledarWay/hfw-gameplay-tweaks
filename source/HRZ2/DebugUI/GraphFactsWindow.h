@@ -20,6 +20,7 @@ namespace HRZ2::DebugUI
 		static inline GraphRuntime::ObservedFact m_EditFact;
 		static inline char m_EditValue[128] = {};
 		static inline bool m_EditAllGraphs = false;
+		static inline bool m_EditWriteBack = false;
 
 	public:
 		virtual void Render() override;

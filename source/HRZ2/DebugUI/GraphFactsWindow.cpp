@@ -140,7 +140,7 @@ namespace HRZ2::DebugUI
 					ImGui::TextUnformatted(GetFactLabel(o.m_Fact).c_str());
 
 					ImGui::TableNextColumn();
-					ImGui::TextUnformatted(KindName(o.m_Value.m_Kind));
+					ImGui::Text("%s%s", KindName(o.m_Value.m_Kind), o.m_Value.m_WriteBack ? " (write)" : "");
 
 					ImGui::TableNextColumn();
 					std::string graphs;
@@ -250,6 +250,7 @@ namespace HRZ2::DebugUI
 						ImGui::TextDisabled("Bool: true/false, Enum: default or entry UUID, Position: x,y,z (* keeps an axis)");
 						ImGui::InputText("Value", m_EditValue, sizeof(m_EditValue));
 						ImGui::Checkbox("Apply to all watched graphs", &m_EditAllGraphs);
+						ImGui::Checkbox("Write back to the real fact (native code sees it too)", &m_EditWriteBack);
 
 						const auto parsed = ParseOverrideValue(m_EditFact.m_Kind, m_EditValue);
 
@@ -261,6 +262,7 @@ namespace HRZ2::DebugUI
 							FactOverride o;
 							o.m_Fact = m_EditFact.m_Fact;
 							o.m_Value = *parsed;
+							o.m_Value.m_WriteBack = m_EditWriteBack;
 							o.m_Source = "ui";
 
 							if (!m_EditAllGraphs)

@@ -240,6 +240,7 @@ namespace InternalModConfig
 					f.Enabled = t["Enable"].value_or(true);
 					f.Fact = std::string(t["Fact"].value_or(""));
 					f.Type = std::string(t["Type"].value_or(""));
+					f.WriteBack = t["WriteBack"].value_or(false);
 
 					// Value may be written as a string, bool or number
 					if (auto v = t["Value"].value<std::string>())

@@ -520,15 +520,46 @@ namespace HRZ2::GraphRuntime
 		}
 
 		// Calls from code outside the watched graphs, for watched facts only
-		template<typename T, typename ApplyFn, typename FormatFn>
-		T WatchGet(void *ReturnAddress, void *Context, void *Fact, FactKind Kind, T Result, ApplyFn Apply, FormatFn Format)
+		// Logs write-backs at most every 2 s per fact, the game may keep restoring its own value
+		void LogWriteBack(void *Context, void *Fact, const std::string& Value)
+		{
+			static std::mutex mutex;
+			static std::map<void *, uint64_t> last;
+			const auto now = GetTickCount64();
+			GGUUID uuid {};
+
+			{
+				std::scoped_lock lock(mutex);
+				auto& tick = last[Fact];
+
+				if (now - tick < 2000)
+					return;
+
+				tick = now;
+			}
+
+			if (SafeReadUUID(Fact, &uuid))
+				spdlog::info("[graph] write-back {} = {} ctx={:#x}", GetFactLabel(uuid), Value, ContextId(Context));
+		}
+
+		template<typename T, typename ApplyFn, typename FormatFn, typename WriteFn>
+		T WatchGet(void *ReturnAddress, void *Context, void *Fact, FactKind Kind, T Result, ApplyFn Apply, FormatFn Format, WriteFn Write)
 		{
 			if (auto call = WatchedCall(ReturnAddress, Fact))
 			{
 				const auto o = FindCallerOverride(*call, Kind);
+				const auto real = Result;
 
 				if (o)
+				{
 					Apply(Result, *o);
+
+					if (o->m_WriteBack && real != Result)
+					{
+						Write(Context, Fact, Result);
+						LogWriteBack(Context, Fact, Format(Result));
+					}
+				}
 
 				ObserveWatched(*call, Context, Fact, Kind, false, o.has_value(), Format(Result), 0);
 			}
@@ -546,6 +577,9 @@ namespace HRZ2::GraphRuntime
 		const auto ApplyInt = [](int& R, const OverrideValue& O) { R = O.m_Int; };
 		const auto ApplyFloat = [](float& R, const OverrideValue& O) { R = O.m_Float; };
 		const auto FormatBool = [](bool R) { return std::string(R ? "true" : "false"); };
+		const auto WriteBool = [](void *C, void *F, bool V) { g_SetBool(C, F, V); };
+		const auto WriteInt = [](void *C, void *F, int V) { g_SetInt(C, F, V); };
+		const auto WriteFloat = [](void *C, void *F, float V) { g_SetFloat(C, F, V); };
 		const auto FormatInt = [](int R) { return std::to_string(R); };
 		const auto FormatFloat = [](float R) { return std::format("{:.3f}", R); };
 
@@ -578,6 +612,12 @@ namespace HRZ2::GraphRuntime
 			{
 				const auto o = FindCallerOverride(*call, FactKind::Enum);
 				auto value = ApplyEnumOverride(Fact, Result, o);
+
+				if (o && o->m_WriteBack && value != Result)
+				{
+					g_SetEnum(Context, Fact, value);
+					LogWriteBack(Context, Fact, EnumEntryName(value));
+				}
 				ObserveWatched(*call, Context, Fact, FactKind::Enum, false, value != Result, EnumEntryName(value));
 				return value;
 			}
@@ -616,13 +656,21 @@ namespace HRZ2::GraphRuntime
 				const auto o = LookupOverride(*range, Fact, FactKind::Bool);
 
 				if (o)
+				{
+					if (o->m_WriteBack && result != o->m_Bool)
+					{
+						g_SetBool(Context, Fact, o->m_Bool);
+						LogWriteBack(Context, Fact, o->m_Bool ? "true" : "false");
+					}
+
 					result = o->m_Bool;
+				}
 
 				Observe(*range, Fact, FactKind::Bool, false, o.has_value(), result ? "true" : "false", result ? 1.0f : 0.0f);
 				return result;
 			}
 
-			return WatchGet(_ReturnAddress(), Context, Fact, FactKind::Bool, result, ApplyBool, FormatBool);
+			return WatchGet(_ReturnAddress(), Context, Fact, FactKind::Bool, result, ApplyBool, FormatBool, WriteBool);
 		}
 
 		void *HookGetEnum(void *Context, void *Fact)
@@ -631,7 +679,15 @@ namespace HRZ2::GraphRuntime
 
 			if (auto range = FindRange(_ReturnAddress()))
 			{
-				auto value = ApplyEnumOverride(Fact, result, LookupOverride(*range, Fact, FactKind::Enum));
+				const auto o = LookupOverride(*range, Fact, FactKind::Enum);
+				auto value = ApplyEnumOverride(Fact, result, o);
+
+				if (o && o->m_WriteBack && value != result)
+				{
+					g_SetEnum(Context, Fact, value);
+					LogWriteBack(Context, Fact, EnumEntryName(value));
+				}
+
 				Observe(*range, Fact, FactKind::Enum, false, value != result, EnumEntryName(value));
 				return value;
 			}
@@ -648,13 +704,21 @@ namespace HRZ2::GraphRuntime
 				const auto o = LookupOverride(*range, Fact, FactKind::Int);
 
 				if (o)
+				{
+					if (o->m_WriteBack && result != o->m_Int)
+					{
+						g_SetInt(Context, Fact, o->m_Int);
+						LogWriteBack(Context, Fact, std::to_string(o->m_Int));
+					}
+
 					result = o->m_Int;
+				}
 
 				Observe(*range, Fact, FactKind::Int, false, o.has_value(), std::to_string(result), static_cast<float>(result));
 				return result;
 			}
 
-			return WatchGet(_ReturnAddress(), Context, Fact, FactKind::Int, result, ApplyInt, FormatInt);
+			return WatchGet(_ReturnAddress(), Context, Fact, FactKind::Int, result, ApplyInt, FormatInt, WriteInt);
 		}
 
 		float HookGetFloat(void *Context, void *Fact)
@@ -666,13 +730,21 @@ namespace HRZ2::GraphRuntime
 				const auto o = LookupOverride(*range, Fact, FactKind::Float);
 
 				if (o)
+				{
+					if (o->m_WriteBack && result != o->m_Float)
+					{
+						g_SetFloat(Context, Fact, o->m_Float);
+						LogWriteBack(Context, Fact, std::format("{:.3f}", o->m_Float));
+					}
+
 					result = o->m_Float;
+				}
 
 				Observe(*range, Fact, FactKind::Float, false, o.has_value(), std::format("{:.3f}", result), result);
 				return result;
 			}
 
-			return WatchGet(_ReturnAddress(), Context, Fact, FactKind::Float, result, ApplyFloat, FormatFloat);
+			return WatchGet(_ReturnAddress(), Context, Fact, FactKind::Float, result, ApplyFloat, FormatFloat, WriteFloat);
 		}
 
 		void *HookGetPosition(void *Out, void *Context, void *Fact)
@@ -759,7 +831,7 @@ namespace HRZ2::GraphRuntime
 		//
 		bool NativeGetBool(void *Context, void *Fact)
 		{
-			return WatchGet(_ReturnAddress(), Context, Fact, FactKind::Bool, g_GetBool(Context, Fact), ApplyBool, FormatBool);
+			return WatchGet(_ReturnAddress(), Context, Fact, FactKind::Bool, g_GetBool(Context, Fact), ApplyBool, FormatBool, WriteBool);
 		}
 
 		void *NativeGetEnum(void *Context, void *Fact)
@@ -769,12 +841,12 @@ namespace HRZ2::GraphRuntime
 
 		int NativeGetInt(void *Context, void *Fact)
 		{
-			return WatchGet(_ReturnAddress(), Context, Fact, FactKind::Int, g_GetInt(Context, Fact), ApplyInt, FormatInt);
+			return WatchGet(_ReturnAddress(), Context, Fact, FactKind::Int, g_GetInt(Context, Fact), ApplyInt, FormatInt, WriteInt);
 		}
 
 		float NativeGetFloat(void *Context, void *Fact)
 		{
-			return WatchGet(_ReturnAddress(), Context, Fact, FactKind::Float, g_GetFloat(Context, Fact), ApplyFloat, FormatFloat);
+			return WatchGet(_ReturnAddress(), Context, Fact, FactKind::Float, g_GetFloat(Context, Fact), ApplyFloat, FormatFloat, WriteFloat);
 		}
 
 		void *NativeGetPosition(void *Out, void *Context, void *Fact)
@@ -1172,12 +1244,13 @@ namespace HRZ2::GraphRuntime
 		}
 
 		return std::format(
-			"[[FactOverride]]\nGraphs = [{}]\nFact = \"{}\"  # {}\nType = \"{}\"\nValue = \"{}\"\n",
+			"[[FactOverride]]\nGraphs = [{}]\nFact = \"{}\"  # {}\nType = \"{}\"\nValue = \"{}\"\nWriteBack = {}\n",
 			graphs,
 			Override.m_Fact,
 			GetFactLabel(Override.m_Fact),
 			KindName(v.m_Kind),
-			value);
+			value,
+			v.m_WriteBack);
 	}
 
 	void WatchFact(const GGUUID& Fact)
@@ -1451,6 +1524,7 @@ namespace HRZ2::GraphRuntime
 			o.m_Fact = *fact;
 			o.m_Value = *value;
 			o.m_Enabled = entry.Enabled;
+			o.m_Value.m_WriteBack = entry.WriteBack;
 			o.m_Source = "config";
 
 			// Graph tags named by an override must be watched for it to apply; "native" needs the fact watched instead

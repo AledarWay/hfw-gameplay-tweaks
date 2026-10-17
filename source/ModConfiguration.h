@@ -21,6 +21,7 @@ namespace InternalModConfig
 		std::string Fact;
 		std::string Type;
 		std::string Value;
+		bool WriteBack = false;
 	};
 
 	struct SupercellLocation
