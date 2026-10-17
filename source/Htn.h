@@ -47,4 +47,7 @@ namespace Htn
 	// Test: while ridden, skip do_mounted so the mount's AI picks its own plan (e.g. an attack)
 	void RequestMountActsAlone(uint32_t Milliseconds);
 	uint32_t GetMountActsAloneRemaining();
+
+	// Test: as above, and the Sunwing plasma barrage fires without flying to its shooting position first
+	void RequestForcedShot(uint32_t Milliseconds);
 }

@@ -445,8 +445,18 @@ namespace HRZ2::DebugUI
 						Htn::RequestMountActsAlone(seconds * 1000);
 				}
 
+				ImGui::Separator();
+
+				for (const uint32_t seconds : { 5u, 10u })
+				{
+					if (ImGui::MenuItem(std::format("Sunwing: force the plasma barrage for {} s", seconds).c_str()))
+						Htn::RequestForcedShot(seconds * 1000);
+				}
+
+				ImGui::Separator();
+
 				if (ImGui::MenuItem("Stop"))
-					Htn::RequestMountActsAlone(0);
+					Htn::RequestForcedShot(0);
 
 				ImGui::EndMenu();
 			}

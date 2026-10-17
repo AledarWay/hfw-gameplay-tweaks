@@ -86,6 +86,7 @@ namespace Htn
 
 		// pass-if-mount forces the condition in windows only, so the mount still picks other attacks in between
 		std::atomic_uint64_t g_MountActsAloneUntil = 0; // "fail-while-testing" cells fail until then
+		std::atomic_uint64_t g_ForceShotUntil = 0;		 // pass-if-mount passes and the shot needs no position until then
 		std::atomic_uint64_t g_PassWindowMs = 6000;
 		std::atomic_uint64_t g_PassCooldownMs = 12000;
 		std::array<std::atomic_uint64_t, MaxConditionalCells> g_PassWindowStart;
@@ -121,7 +122,7 @@ namespace Htn
 					start = now;
 				}
 
-				if (WorldState == g_MountWorldState && now - start < window)
+				if (WorldState == g_MountWorldState && (now - start < window || now < g_ForceShotUntil.load()))
 				{
 					const auto next = *reinterpret_cast<uint64_t **>(reinterpret_cast<uintptr_t>(Frame) + 0x10);
 					return reinterpret_cast<CellFn>(*next)(Planner, WorldState, next, R9);
@@ -638,6 +639,42 @@ namespace Htn
 			spdlog::info("[htn] {} agent {:#x}: {}", Domains[Domain].m_Name, WorldState, summary);
 		}
 
+		// Sunwing shoot_from_distance only fires once (at_shoot_from_distance_position) holds, which needs the mount to
+		// fly there first. While forcing a shot the check reads "player" instead, a predicate every agent has.
+		constexpr uint32_t ShotPositionCell = 0x553C0;
+		constexpr uint64_t ShotPositionPredicate = 301; // at_shoot_from_distance_position
+		constexpr uint64_t AlwaysTruePredicate = 12;	// player
+		bool g_ShotPatched = false;
+
+		void UpdateForcedShotLocked()
+		{
+			const auto pool = g_States[0].m_Pool.load();
+
+			if (!pool)
+				return;
+
+			const auto cell = reinterpret_cast<uint64_t *>(pool + ShotPositionCell);
+			const bool want = GetTickCount64() < g_ForceShotUntil.load();
+
+			if (want && !g_ShotPatched)
+			{
+				uint64_t value = 0;
+
+				if (!SafeCopy(&value, cell, sizeof(value)) || value != ShotPositionPredicate)
+					return;
+
+				SafeCopy(cell, &AlwaysTruePredicate, sizeof(uint64_t));
+				g_ShotPatched = true;
+				spdlog::info("[htn] forced shot: position check skipped");
+			}
+			else if (!want && g_ShotPatched)
+			{
+				SafeCopy(cell, &ShotPositionPredicate, sizeof(uint64_t));
+				g_ShotPatched = false;
+				spdlog::info("[htn] forced shot: position check restored");
+			}
+		}
+
 		template<size_t D>
 		uint64_t HookBehave(void *Planner, void *WorldState, void *Frame, void *R9)
 		{
@@ -650,6 +687,9 @@ namespace Htn
 
 				if (GetTickCount64() < g_DumpUntil.load() && g_Dumped.insert(ws).second)
 					dump = true;
+
+				if constexpr (D == 0)
+					UpdateForcedShotLocked();
 			}
 
 			if (dump)
@@ -873,6 +913,14 @@ namespace Htn
 	{
 		g_MountActsAloneUntil = GetTickCount64() + Milliseconds;
 		spdlog::info("[htn] ridden mount acts on its own for {} ms", Milliseconds);
+	}
+
+	void RequestForcedShot(uint32_t Milliseconds)
+	{
+		const auto until = GetTickCount64() + Milliseconds;
+		g_ForceShotUntil = until;
+		g_MountActsAloneUntil = until;
+		spdlog::info("[htn] forcing a Sunwing plasma barrage for {} ms", Milliseconds);
 	}
 
 	uint32_t GetMountActsAloneRemaining()
