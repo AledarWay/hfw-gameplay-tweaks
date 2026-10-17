@@ -440,7 +440,8 @@ namespace HRZ2::DebugUI
 			{
 				const auto& p = patches[i];
 				bool enabled = p.m_Enabled;
-				const auto label = std::format("{} +{:#x} = {}{}##htn{}", p.m_Domain, p.m_Offset, p.m_Value, p.m_Error.empty() ? "" : " (" + p.m_Error + ")", i);
+				const auto name = p.m_Label.empty() ? std::format("{} +{:#x} = {}", p.m_Domain, p.m_Offset, p.m_Value) : p.m_Label;
+				const auto label = std::format("{}{}##htn{}", name, p.m_Error.empty() ? "" : " (" + p.m_Error + ")", i);
 
 				if (ImGui::MenuItem(label.c_str(), nullptr, &enabled))
 					Htn::SetPatchEnabled(i, enabled);

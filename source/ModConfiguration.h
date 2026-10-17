@@ -86,6 +86,7 @@ namespace InternalModConfig
 
 		bool KeepSupercellsAfterAether;
 		bool AllowAggressiveFlyingMountOverride;
+		bool CalledFlyingMountFights;
 
 		// [GraphDebug]
 		std::vector<std::string> WatchGraphs;

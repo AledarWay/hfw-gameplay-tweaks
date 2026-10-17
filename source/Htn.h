@@ -23,7 +23,8 @@ namespace Htn
 		bool m_Enabled = true;
 		std::string m_Domain;
 		uint32_t m_Offset = 0; // Byte offset in the pool
-		std::string m_Value;   // Number, "pred:<name>" or "sym:<name>"
+		std::string m_Value;   // Number, "pred:<name>", "sym:<name>" or "fail" (code cell that never succeeds)
+		std::string m_Label;   // Shown in the menu, empty for [[HTNPatch]] entries
 		bool m_Applied = false;
 		uint64_t m_Original = 0;
 		std::string m_Error;

@@ -57,6 +57,12 @@ namespace Htn
 			std::unordered_map<uintptr_t, std::string> m_LastTrace; // Agent -> last logged plan summary
 		};
 
+		// A compiled task, method or condition reports success by calling its continuation. Returning without
+		// calling it is a failure, so the planner moves on to the next alternative.
+		void FailCell(void *, void *, void *)
+		{
+		}
+
 		uintptr_t g_Base = 0;
 		std::atomic_bool g_Installed = false;
 		std::array<DomainState, Domains.size()> g_States;
@@ -156,6 +162,9 @@ namespace Htn
 
 				return std::nullopt;
 			}
+
+			if (Text == "fail")
+				return reinterpret_cast<uint64_t>(&FailCell);
 
 			if (Text.starts_with("sym:"))
 			{
@@ -600,6 +609,40 @@ namespace Htn
 
 			p.m_Offset = offset;
 			g_Patches.emplace_back(std::move(p));
+		}
+
+		if (ModConfiguration.CalledFlyingMountFights)
+		{
+			// The Sunwing behavior picks "player's mount" before combat: when that method finds anything to do, the
+			// mount never reaches circle_combat. Failing its idle alternatives lets the planner fall through to combat,
+			// the same path a second overridden Sunwing takes. Calling, pick-up and riding are separate alternatives.
+			struct Preset
+			{
+				uint32_t m_Offset;
+				bool m_Enabled;
+				const char *m_Label;
+			};
+
+			constexpr Preset presets[] = {
+				{ 0x24C18, true, "Sunwing: in the air, skip go_to_hacker/glide_patrol" },
+				{ 0x24C50, true, "Sunwing: in the air, skip wait_hacked (continue)" },
+				{ 0x24C70, true, "Sunwing: in the air, skip wait_hacked (begin)" },
+				{ 0x24FE0, true, "Sunwing: landed, skip wait_hacked (continue)" },
+				{ 0x25000, true, "Sunwing: landed, skip wait_hacked (begin)" },
+				{ 0x24F10, false, "Sunwing: landed, skip go_to_hacker" },
+				{ 0x194F0, false, "Sunwing: landed, skip the whole mount branch (calling while landed may break)" },
+			};
+
+			for (const auto& preset : presets)
+			{
+				Patch p;
+				p.m_Enabled = preset.m_Enabled;
+				p.m_Domain = "sunwing";
+				p.m_Offset = preset.m_Offset;
+				p.m_Value = "fail";
+				p.m_Label = preset.m_Label;
+				g_Patches.emplace_back(std::move(p));
+			}
 		}
 	}
 

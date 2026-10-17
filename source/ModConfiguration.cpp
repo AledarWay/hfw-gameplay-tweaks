@@ -165,6 +165,7 @@ namespace InternalModConfig
 				o.KeepSupercellsAfterAether = *v;
 
 			PARSE_TOML_MEMBER(gameplay, AllowAggressiveFlyingMountOverride);
+			PARSE_TOML_MEMBER(gameplay, CalledFlyingMountFights);
 		}
 
 		auto parseStringArray = [](auto Node, std::vector<std::string>& Target)
