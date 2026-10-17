@@ -158,7 +158,7 @@ namespace HRZ2::DebugUI
 				ImGui::TableSetupColumn("Type", ImGuiTableColumnFlags_WidthFixed);
 				ImGui::TableSetupColumn("Last", ImGuiTableColumnFlags_WidthFixed);
 				ImGui::TableSetupColumn("Value");
-				ImGui::TableSetupColumn("Count / age", ImGuiTableColumnFlags_WidthFixed);
+				ImGui::TableSetupColumn("Count / changed / used", ImGuiTableColumnFlags_WidthFixed);
 				ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed);
 				ImGui::TableHeadersRow();
 
@@ -192,7 +192,11 @@ namespace HRZ2::DebugUI
 						ImGui::TextUnformatted(f.m_Value.c_str());
 
 					ImGui::TableNextColumn();
-					ImGui::Text("%llu / %.1fs", static_cast<unsigned long long>(f.m_Count), (now - f.m_LastTick) / 1000.0);
+					ImGui::Text(
+						"%llu / %.1fs / %.1fs ago",
+						static_cast<unsigned long long>(f.m_Count),
+						(now - f.m_ChangedTick) / 1000.0,
+						(now - f.m_LastTick) / 1000.0);
 
 					ImGui::TableNextColumn();
 

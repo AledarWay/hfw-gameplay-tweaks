@@ -185,6 +185,47 @@ namespace InternalModConfig
 			PARSE_TOML_MEMBER(graphDebug, TraceSupercells);
 		}
 
+		// [Supercells]
+		if (auto supercells = Table["Supercells"].as_table())
+		{
+			o.SupercellIncludeAllLocations = (*supercells)["IncludeAllLocations"].value_or(false);
+			o.SupercellIgnoreQuestBlocks = (*supercells)["IgnoreQuestBlocks"].value_or(false);
+			o.SupercellUseCustomLocations = (*supercells)["UseCustomLocations"].value_or(false);
+
+			if (auto a = (*supercells)["DisabledLocations"].as_array())
+			{
+				for (const auto& e : *a)
+				{
+					if (auto v = e.value<int64_t>())
+						o.SupercellDisabledLocations.emplace_back(static_cast<int>(*v));
+				}
+			}
+		}
+
+		// [[SupercellLocation]]
+		if (auto locationArray = Table["SupercellLocation"].as_array())
+		{
+			locationArray->for_each(
+				[&](const toml::table& t)
+				{
+					SupercellLocation l;
+					l.Enabled = t["Enable"].value_or(true);
+					l.X = t["X"].value_or(0.0);
+					l.Y = t["Y"].value_or(0.0);
+
+					if (auto z = t["Z"].value<double>())
+					{
+						l.Z = *z;
+						l.HasZ = true;
+					}
+
+					l.Inner = t["Inner"].value_or(0.0f);
+					l.Outer = t["Outer"].value_or(0.0f);
+					l.Template = t["Template"].value_or(-1);
+					o.SupercellLocations.emplace_back(l);
+				});
+		}
+
 		// [[FactOverride]]
 		if (auto factOverrideArray = Table["FactOverride"].as_array())
 		{

@@ -313,6 +313,9 @@ namespace HRZ2::GraphRuntime
 				entry.m_LoggedTick = tick;
 			}
 
+			if (entry.m_ChangedTick == 0 || entry.m_Value != Value)
+				entry.m_ChangedTick = tick;
+
 			entry.m_Value = std::move(Value);
 		}
 
@@ -363,7 +366,11 @@ namespace HRZ2::GraphRuntime
 
 			if (auto range = FindRange(_ReturnAddress()))
 			{
-				const auto o = LookupOverride(*range, Fact, FactKind::Enum);
+				auto o = LookupOverride(*range, Fact, FactKind::Enum);
+				GGUUID current {};
+
+				if (o && o->m_OnlyWhenEntry && (!result || !SafeReadUUID(result, &current) || current != *o->m_OnlyWhenEntry))
+					o.reset();
 
 				if (o)
 				{
@@ -1013,5 +1020,87 @@ namespace HRZ2::GraphRuntime
 			spdlog::info("[graph] loaded {} fact overrides from config", overrides.size());
 			SetOverrides("config", std::move(overrides));
 		}
+	}
+
+	std::optional<bool> ReadBool(void *Context, void *Fact)
+	{
+		if (!IsInstalled() || !Fact || !g_GetBool)
+			return std::nullopt;
+
+		return g_GetBool(Context, Fact);
+	}
+
+	void *ReadEnum(void *Context, void *Fact)
+	{
+		if (!IsInstalled() || !Fact || !g_GetEnum)
+			return nullptr;
+
+		return g_GetEnum(Context, Fact);
+	}
+
+	std::optional<float> ReadFloat(void *Context, void *Fact)
+	{
+		if (!IsInstalled() || !Fact || !g_GetFloat)
+			return std::nullopt;
+
+		return g_GetFloat(Context, Fact);
+	}
+
+	bool ReadPosition(void *Context, void *Fact, double Out[3])
+	{
+		if (!IsInstalled() || !Fact || !g_GetPosition)
+			return false;
+
+		alignas(16) double buffer[4] = {};
+		auto result = static_cast<const double *>(g_GetPosition(buffer, Context, Fact));
+		std::copy_n(result ? result : buffer, 3, Out);
+		return true;
+	}
+
+	bool WriteBool(void *Context, void *Fact, bool Value)
+	{
+		if (!IsInstalled() || !Fact || !g_SetBool)
+			return false;
+
+		g_SetBool(Context, Fact, Value);
+		return true;
+	}
+
+	bool WriteInt(void *Context, void *Fact, int Value)
+	{
+		if (!IsInstalled() || !Fact || !g_SetInt)
+			return false;
+
+		g_SetInt(Context, Fact, Value);
+		return true;
+	}
+
+	bool WriteFloat(void *Context, void *Fact, float Value)
+	{
+		if (!IsInstalled() || !Fact || !g_SetFloat)
+			return false;
+
+		g_SetFloat(Context, Fact, Value);
+		return true;
+	}
+
+	bool WritePosition(void *Context, void *Fact, const double Value[3])
+	{
+		if (!IsInstalled() || !Fact || !g_SetPosition)
+			return false;
+
+		alignas(16) double buffer[4] = { Value[0], Value[1], Value[2], 0.0 };
+		g_SetPosition(Context, Fact, buffer);
+		return true;
+	}
+
+	bool GetObjectUUID(const void *Object, GGUUID *Out)
+	{
+		return Object && SafeReadUUID(Object, Out);
+	}
+
+	std::string DescribeEnumEntry(void *Entry)
+	{
+		return EnumEntryName(Entry);
 	}
 }

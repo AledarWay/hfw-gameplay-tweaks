@@ -23,6 +23,18 @@ namespace InternalModConfig
 		std::string Value;
 	};
 
+	struct SupercellLocation
+	{
+		bool Enabled = true;
+		double X = 0;
+		double Y = 0;
+		double Z = 0;
+		bool HasZ = false;
+		float Inner = 0;
+		float Outer = 0;
+		int Template = -1;
+	};
+
 	struct GlobalSettings
 	{
 		GlobalSettings() = default;
@@ -69,6 +81,15 @@ namespace InternalModConfig
 		std::vector<std::string> WatchGraphs;
 		std::vector<std::string> TraceGraphs;
 		bool TraceSupercells;
+
+		// [Supercells]
+		bool SupercellIncludeAllLocations;
+		bool SupercellIgnoreQuestBlocks;
+		bool SupercellUseCustomLocations;
+		std::vector<int> SupercellDisabledLocations;
+
+		// [[SupercellLocation]]
+		std::vector<SupercellLocation> SupercellLocations;
 
 		// [[FactOverride]]
 		std::vector<FactOverride> FactOverrides;

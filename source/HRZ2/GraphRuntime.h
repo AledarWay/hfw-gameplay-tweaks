@@ -31,6 +31,7 @@ namespace HRZ2::GraphRuntime
 		int m_Int = 0;
 		float m_Float = 0.0f;
 		std::optional<GGUUID> m_EnumEntry; // Empty means the fact's default entry
+		std::optional<GGUUID> m_OnlyWhenEntry; // Enum only: apply just while the real value is this entry
 		double m_Position[3] = {};
 		bool m_PositionAxes[3] = { true, true, true }; // Axes left false keep the game's value
 	};
@@ -56,6 +57,7 @@ namespace HRZ2::GraphRuntime
 		float m_Number = 0.0f;
 		uint64_t m_Count = 0;
 		uint64_t m_LastTick = 0;
+		uint64_t m_ChangedTick = 0;
 	};
 
 	struct WatchedGraph
@@ -96,6 +98,18 @@ namespace HRZ2::GraphRuntime
 	// Readable names for facts in the debug UI
 	void SetFactLabel(const GGUUID& Fact, std::string Label);
 	std::string GetFactLabel(const GGUUID& Fact);
+
+	// Direct fact access without overrides, for mod code on the game thread. Context is the graph's 16-byte fact context.
+	std::optional<bool> ReadBool(void *Context, void *Fact);
+	void *ReadEnum(void *Context, void *Fact);
+	std::optional<float> ReadFloat(void *Context, void *Fact);
+	bool ReadPosition(void *Context, void *Fact, double Out[3]);
+	bool WriteBool(void *Context, void *Fact, bool Value);
+	bool WriteInt(void *Context, void *Fact, int Value);
+	bool WriteFloat(void *Context, void *Fact, float Value);
+	bool WritePosition(void *Context, void *Fact, const double Value[3]);
+	bool GetObjectUUID(const void *Object, GGUUID *Out);
+	std::string DescribeEnumEntry(void *Entry);
 
 	const char *KindName(FactKind Kind);
 	std::optional<OverrideValue> ParseOverrideValue(FactKind Kind, std::string_view Text);
