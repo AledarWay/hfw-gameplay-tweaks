@@ -1,5 +1,7 @@
 #include <shared_mutex>
 #include <algorithm>
+#include <cmath>
+#include <format>
 #include <imgui.h>
 #include <Windows.h>
 #include "../../ModConfiguration.h"
@@ -24,6 +26,8 @@
 #include "GraphFactsWindow.h"
 #include "SupercellWindow.h"
 #include "../GraphScanner.h"
+#include "../GraphRuntime.h"
+#include "../../Supercells.h"
 
 namespace HRZ2::DebugUI
 {
@@ -227,6 +231,51 @@ namespace HRZ2::DebugUI
 
 			doTeleport("Free Camera Position", m_FreeCamPosition.Position);
 			ImGui::MenuItem("##septeleport1", nullptr, nullptr, false);
+
+			// Supercell storm, as last read by the storm scripts
+			if (const auto storm = GraphRuntime::GetObservedFact(GGUUID::Parse("9F73BE2D-14F3-A840-BD6A-172FF8623CEA")))
+			{
+				const auto& p = storm->m_Position;
+				doTeleport("Supercell Storm Center", { p[0], p[1], p[2] });
+
+				// Point on the outer radius towards the player, to watch the storm from its edge
+				const auto outer = GraphRuntime::GetObservedFact(GGUUID::Parse("EE3D9BE4-EC4D-D34B-B77F-7B756FBFBC20"));
+				double player[3];
+
+				if (outer && outer->m_Number > 0.0f && Supercells::GetPlayerPosition(player))
+				{
+					const double dx = player[0] - p[0];
+					const double dy = player[1] - p[1];
+					const double length = std::sqrt(dx * dx + dy * dy);
+
+					if (length > 1.0)
+					{
+						const double scale = outer->m_Number / length;
+						doTeleport("Supercell Storm Edge", { p[0] + dx * scale, p[1] + dy * scale, p[2] });
+					}
+				}
+			}
+
+			if (ImGui::BeginMenu("Supercell Locations"))
+			{
+				for (const auto& l : Supercells::GetGameLocations())
+				{
+					if (l.m_HavePosition)
+						doTeleport(std::format("Game location {}", l.m_Index).c_str(), { l.m_Position[0], l.m_Position[1], l.m_Position[2] });
+				}
+
+				const auto custom = Supercells::GetCustomLocations();
+
+				for (size_t i = 0; i < custom.size(); i++)
+				{
+					const auto& c = custom[i];
+					doTeleport(std::format("Custom location {}", i).c_str(), { c.m_Position[0], c.m_Position[1], c.m_Position[2] });
+				}
+
+				ImGui::EndMenu();
+			}
+
+			ImGui::MenuItem("##septeleport3", nullptr, nullptr, false);
 			doTeleport("HZD - Meridian Entrance", { 3918.612, 5465.897, 830.652 });
 			doTeleport("HZD - The Spire", { 4162.499, 4757.230, 774.453 });
 			doTeleport("HZD - The Estate", { 4082.374, 4614.900, 710.106 });
