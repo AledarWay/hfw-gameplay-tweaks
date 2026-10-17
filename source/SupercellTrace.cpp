@@ -9,6 +9,8 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
+#include "HRZ2/Core/RTTI.h"
+#include "HRZ2/Core/RTTIRefObject.h"
 #include "HRZ2/PCore/Common.h"
 #include "ModConfiguration.h"
 #include "SupercellTrace.h"
@@ -176,9 +178,52 @@ namespace SupercellTrace
 			return result;
 		}
 
+		// Quest whose completion makes the limiter suppress supercells (late game); reported as not started instead
+		constexpr auto LateQuestStateFact = GGUUID::Parse("05D97477-7F4F-F94E-9D85-F5954FC042B9");
+
+		void *DefaultEnumEntry(void *Fact)
+		{
+			static std::atomic<void *> cached = nullptr;
+
+			if (auto entry = cached.load())
+				return entry;
+
+			try
+			{
+				auto fact = static_cast<RTTIRefObject *>(Fact);
+				const auto defaultUUID = fact->GetMemberRefUnsafe<GGUUID>("DefaultValueUUID");
+				auto definition = fact->GetMemberRefUnsafe<Ref<RTTIRefObject>>("EnumDefinition").GetPtr();
+
+				for (auto& entry : definition->GetMemberRefUnsafe<Array<Ref<RTTIRefObject>>>("EnumValues"))
+				{
+					if (entry.GetPtr() && entry->m_UUID == defaultUUID)
+					{
+						cached = entry.GetPtr();
+						return entry.GetPtr();
+					}
+				}
+			}
+			catch (const std::exception&)
+			{
+			}
+
+			return nullptr;
+		}
+
 		void *HookGetEnum(void *Context, void *Fact)
 		{
-			const auto result = g_GetEnum(Context, Fact);
+			auto result = g_GetEnum(Context, Fact);
+
+			if (ModConfiguration.KeepSupercellsAfterAether && RangeName(_ReturnAddress()))
+			{
+				GGUUID uuid {};
+
+				if (SafeReadUUID(Fact, &uuid) && uuid == LateQuestStateFact)
+				{
+					if (auto entry = DefaultEnumEntry(Fact))
+						result = entry;
+				}
+			}
 
 			if (auto range = ModConfiguration.SupercellTrace ? RangeName(_ReturnAddress()) : nullptr)
 				LogOnce(std::format("{} GetEnum {} -> {}", range, Describe(Fact), Describe(result)));
