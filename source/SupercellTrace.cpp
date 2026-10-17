@@ -148,6 +148,7 @@ namespace SupercellTrace
 		constexpr BoolOverride SupercellOverrides[] = {
 			{ GGUUID::Parse("E5E98601-17CB-644B-975B-E1EB6CB9571C"), false }, // Supercells disabled (set on merge)
 			{ GGUUID::Parse("5FB621F0-9A0E-3040-9D75-7D48CF594FAB"), true },  // Supercell weather enabled (cleared on merge)
+			{ GGUUID::Parse("095C0A02-BBF4-CB40-9E67-85E355006361"), false }, // Read by the lightning effects, true only after merge
 		};
 
 		bool HookGetBool(void *Context, void *Fact)
