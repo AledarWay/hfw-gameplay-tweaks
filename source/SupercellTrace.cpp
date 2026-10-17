@@ -138,8 +138,17 @@ namespace SupercellTrace
 		uint64_t (*g_SetInt)(void *, void *, int) = nullptr;
 		uint64_t (*g_SetFloat)(void *, void *, float) = nullptr;
 
-		// Set once the AETHER merge happens; the supercell scripts stop spawning storms while it reads true
-		constexpr auto SupercellsDisabledFact = GGUUID::Parse("E5E98601-17CB-644B-975B-E1EB6CB9571C");
+		struct BoolOverride
+		{
+			GGUUID m_Fact;
+			bool m_Value;
+		};
+
+		// Values the supercell scripts see after the AETHER merge, to match a pre-merge save
+		constexpr BoolOverride SupercellOverrides[] = {
+			{ GGUUID::Parse("E5E98601-17CB-644B-975B-E1EB6CB9571C"), false }, // Supercells disabled (set on merge)
+			{ GGUUID::Parse("5FB621F0-9A0E-3040-9D75-7D48CF594FAB"), true },  // Supercell weather enabled (cleared on merge)
+		};
 
 		bool HookGetBool(void *Context, void *Fact)
 		{
@@ -151,8 +160,14 @@ namespace SupercellTrace
 
 			GGUUID uuid {};
 
-			if (result && ModConfiguration.KeepSupercellsAfterAether && SafeReadUUID(Fact, &uuid) && uuid == SupercellsDisabledFact)
-				result = false;
+			if (ModConfiguration.KeepSupercellsAfterAether && SafeReadUUID(Fact, &uuid))
+			{
+				for (const auto& o : SupercellOverrides)
+				{
+					if (uuid == o.m_Fact)
+						result = o.m_Value;
+				}
+			}
 
 			if (ModConfiguration.SupercellTrace)
 				LogOnce(std::format("{} GetBool {} -> {}", range, Describe(Fact), result));
