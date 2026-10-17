@@ -395,6 +395,27 @@ namespace HRZ2::DebugUI
 			spdlog::info("Dumped {} weather setups to asset_dump.txt", setups.size());
 		}
 
+		// Spawn setups stay cached after loading; dump the ones matching AssetDumpTypes (type parts or UUIDs)
+		if (ImGui::MenuItem("Dump Cached Spawn Setups Matching AssetDumpTypes"))
+		{
+			auto& events = ModCoreEvents::GetInstance();
+			std::vector<Ref<RTTIRefObject>> setups;
+			{
+				std::shared_lock lock(events.m_CachedDataMutex);
+
+				for (auto setup : events.m_CachedSpawnSetups)
+				{
+					if (events.ShouldDumpType(setup->GetRTTI()->GetSymbolName()) || events.ShouldDumpType(std::format("{}", setup->m_UUID)))
+						setups.emplace_back(setup);
+				}
+			}
+
+			for (auto& setup : setups)
+				events.DumpObject(setup.GetPtr(), "cached");
+
+			spdlog::info("Dumped {} spawn setups to asset_dump.txt", setups.size());
+		}
+
 		if (ImGui::MenuItem("Scan Graph Programs (graph_scan.txt)"))
 			GraphScanner::ScanCachedGraphPrograms();
 

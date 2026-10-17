@@ -34,7 +34,7 @@ HRZ2::RTTIObjectTweaker::SetValueVisitor::EMode ModCoreEvents::ValuePatchVisitor
 
 ModCoreEvents::ModCoreEvents()
 {
-	// Comma-separated, case-insensitive substrings of RTTI type names
+	// Comma-separated, case-insensitive substrings of RTTI type names or object UUIDs
 	for (const auto& part : ModConfiguration.AssetDumpTypes | std::views::split(','))
 	{
 		std::string filter { std::string_view(part) };
@@ -573,7 +573,7 @@ void ModCoreEvents::OnLoadAssetGroup(const HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRefOb
 		RTTIScanner::AddObservedType(rtti);
 
 		// Dump before patches so the file shows original values
-		if (ShouldDumpType(rtti->GetSymbolName()))
+		if (!m_AssetDumpFilters.empty() && (ShouldDumpType(rtti->GetSymbolName()) || ShouldDumpType(std::format("{}", object->m_UUID))))
 			DumpObject(object.GetPtr(), "load");
 
 		// Apply all patches loaded from user config
