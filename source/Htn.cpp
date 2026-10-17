@@ -52,6 +52,7 @@ namespace Htn
 			std::unordered_map<uint64_t, std::string> m_SymbolNames; // Symbol value -> name
 			std::unordered_map<std::string, uint64_t> m_SymbolValues;
 			std::unordered_set<uintptr_t> m_Agents;
+			std::unordered_map<uintptr_t, std::string> m_LastTrace; // Agent -> last logged plan summary
 		};
 
 		uintptr_t g_Base = 0;
@@ -283,6 +284,53 @@ namespace Htn
 			return g_States[D].m_Dispatch(Pool, A, B, C, E, F);
 		}
 
+		// First argument of the first fact of a predicate, as a name when it is a known symbol
+		std::string FirstArgument(size_t Domain, uintptr_t WorldState, const char *Predicate)
+		{
+			const auto& info = Domains[Domain];
+
+			for (uint32_t i = 0; i < info.m_PredicateCount; i++)
+			{
+				if (strcmp(At<const char *>(info.m_Predicates)[i], Predicate) != 0)
+					continue;
+
+				uintptr_t node = 0;
+				uint64_t q[4] = {};
+
+				if (!SafeCopy(&node, reinterpret_cast<void *>(WorldState + i * 8), sizeof(node)) || !node ||
+					!SafeCopy(q, reinterpret_cast<void *>(node), sizeof(q)))
+					return "-";
+
+				std::scoped_lock lock(g_Mutex);
+				return FormatQword(Domain, q[3]);
+			}
+
+			return "?";
+		}
+
+		// Logs when an agent's active plan, behavior, mover or sensor set changes
+		void TracePlan(size_t Domain, uintptr_t WorldState)
+		{
+			const auto summary = std::format(
+				"plan={} behavior={} mover={} sensors={}",
+				FirstArgument(Domain, WorldState, "active_plan"),
+				FirstArgument(Domain, WorldState, "current_behavior"),
+				FirstArgument(Domain, WorldState, "mover"),
+				FirstArgument(Domain, WorldState, "sensor_set"));
+
+			{
+				std::scoped_lock lock(g_Mutex);
+				auto& last = g_States[Domain].m_LastTrace[WorldState];
+
+				if (last == summary)
+					return;
+
+				last = summary;
+			}
+
+			spdlog::info("[htn] {} agent {:#x}: {}", Domains[Domain].m_Name, WorldState, summary);
+		}
+
 		template<size_t D>
 		uint64_t HookBehave(void *Planner, void *WorldState, void *Frame, void *R9)
 		{
@@ -300,7 +348,12 @@ namespace Htn
 			if (dump)
 				DumpWorldState(D, ws);
 
-			return g_States[D].m_Behave(Planner, WorldState, Frame, R9);
+			const auto result = g_States[D].m_Behave(Planner, WorldState, Frame, R9);
+
+			if (ModConfiguration.HtnDebug)
+				TracePlan(D, ws);
+
+			return result;
 		}
 
 		template<size_t D>
