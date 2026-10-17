@@ -14,6 +14,7 @@ namespace HRZ2::DebugUI
 
 		static inline char m_NewTag[256] = {};
 		static inline bool m_NewTagTrace = false;
+		static inline char m_NewFact[64] = {};
 		static inline ImGuiTextFilter m_Filter;
 
 		static inline GraphRuntime::ObservedFact m_EditFact;

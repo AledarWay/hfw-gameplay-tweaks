@@ -1,4 +1,5 @@
 #include <Windows.h>
+#include <detours/detours.h>
 #include <intrin.h>
 #include <algorithm>
 #include <array>
@@ -157,6 +158,22 @@ namespace HRZ2::GraphRuntime
 
 		std::mutex g_LabelMutex;
 		std::unordered_map<std::string, std::string> g_Labels;
+
+		// Facts watched for every caller
+		constexpr size_t MaxWatchedFacts = 32;
+		std::array<GGUUID, MaxWatchedFacts> g_WatchedFacts = {};
+		std::atomic_size_t g_WatchedFactCount = 0;
+		std::map<std::pair<std::string, GGUUID>, ObservedEntry> g_WatchObserved; // Guarded by g_ObservedMutex
+
+		std::mutex g_NameMutex;
+		std::unordered_map<uintptr_t, std::string> g_EntryNames;
+		std::unordered_map<uintptr_t, std::string> g_CallerNames;
+		bool g_EntryNamesBuilt = false;
+		uint64_t g_EntryNamesTick = 0;
+
+		uintptr_t g_ExeBase = 0;
+		uintptr_t g_ExeEnd = 0;
+		std::atomic_bool g_NativeInstalled = false;
 
 		std::mutex g_EnumMutex;
 		std::map<std::pair<void *, GGUUID>, void *> g_EnumEntryCache;
@@ -320,6 +337,164 @@ namespace HRZ2::GraphRuntime
 			entry.m_Value = std::move(Value);
 		}
 
+		void BuildEntryNamesLocked()
+		{
+			auto& events = ModCoreEvents::GetInstance();
+			std::shared_lock lock(events.m_CachedDataMutex);
+
+			for (auto graph : events.m_CachedGraphPrograms)
+			{
+				for (const auto& entry : static_cast<ProgramResource *>(graph)->m_EntryPoints)
+				{
+					const std::string_view name(entry.m_EntryPoint.c_str());
+
+					if (auto itr = g_Exports.find(Murmur3(name, 42)); itr != g_Exports.end())
+						g_EntryNames.emplace(reinterpret_cast<uintptr_t>(itr->second), std::string(name));
+				}
+			}
+
+			g_EntryNamesBuilt = true;
+			g_EntryNamesTick = GetTickCount64();
+		}
+
+		std::string CallerName(void *ReturnAddress)
+		{
+			const auto address = reinterpret_cast<uintptr_t>(ReturnAddress);
+
+			if (address >= g_ExeBase && address < g_ExeEnd)
+				return std::format("native+{:#x}", address - g_ExeBase);
+
+			std::scoped_lock lock(g_NameMutex);
+
+			if (auto itr = g_CallerNames.find(address); itr != g_CallerNames.end())
+				return itr->second;
+
+			// Graph code: the closest exported entry point at or below the caller
+			std::string name;
+			auto next = std::upper_bound(g_ExportAddresses.begin(), g_ExportAddresses.end(), address);
+
+			if (next != g_ExportAddresses.begin())
+			{
+				const auto function = *(next - 1);
+				auto itr = g_EntryNames.find(function);
+
+				if (itr == g_EntryNames.end() && (!g_EntryNamesBuilt || GetTickCount64() - g_EntryNamesTick > 10000))
+				{
+					BuildEntryNamesLocked();
+					itr = g_EntryNames.find(function);
+				}
+
+				if (itr != g_EntryNames.end())
+					name = itr->second;
+			}
+
+			if (name.empty())
+				name = std::format("fullgame+{:#x}", address - g_Base);
+
+			g_CallerNames.emplace(address, name);
+			return name;
+		}
+
+		struct WatchCall
+		{
+			std::string m_Caller;
+			GGUUID m_Fact;
+		};
+
+		std::optional<WatchCall> WatchedCall(void *ReturnAddress, void *Fact)
+		{
+			const auto count = g_WatchedFactCount.load(std::memory_order_acquire);
+			GGUUID uuid {};
+
+			if (count == 0 || !SafeReadUUID(Fact, &uuid))
+				return std::nullopt;
+
+			for (size_t i = 0; i < count; i++)
+			{
+				if (g_WatchedFacts[i] == uuid)
+					return WatchCall { CallerName(ReturnAddress), uuid };
+			}
+
+			return std::nullopt;
+		}
+
+		std::optional<OverrideValue> FindCallerOverride(const WatchCall& Call, FactKind Kind)
+		{
+			std::shared_lock lock(g_OverrideMutex);
+
+			for (const auto& o : g_Overrides)
+			{
+				if (o.m_Enabled && !o.m_Graphs.empty() && o.m_Fact == Call.m_Fact && o.m_Value.m_Kind == Kind && TagMatches(Call.m_Caller, o.m_Graphs))
+					return o.m_Value;
+			}
+
+			return std::nullopt;
+		}
+
+		uint64_t ContextId(void *Context)
+		{
+			uint64_t id = 0;
+			__try
+			{
+				memcpy(&id, Context, sizeof(id));
+			}
+			__except (EXCEPTION_EXECUTE_HANDLER)
+			{
+			}
+			return id;
+		}
+
+		void ObserveWatched(const WatchCall& Call, void *Context, void *Fact, FactKind Kind, bool Write, bool Overridden, std::string Value, float Number = 0, const double *Position = nullptr)
+		{
+			const auto tick = GetTickCount64();
+			const auto context = ContextId(Context);
+			std::scoped_lock lock(g_ObservedMutex);
+
+			auto& entry = g_WatchObserved[std::make_pair(Call.m_Caller, Call.m_Fact)];
+			const bool first = entry.m_Count == 0;
+
+			if (first)
+			{
+				entry.m_Graph = Call.m_Caller;
+				entry.m_Fact = Call.m_Fact;
+				entry.m_Kind = Kind;
+			}
+
+			entry.m_Object = Fact;
+			entry.m_LastWasWrite = Write;
+			entry.m_Overridden = Overridden;
+			entry.m_Number = Number;
+			entry.m_Count++;
+			entry.m_LastTick = tick;
+
+			if (Position)
+				std::copy_n(Position, 3, entry.m_Position);
+
+			const bool throttled = Kind == FactKind::Float || Kind == FactKind::Position;
+
+			// Values differ per entity, so the context is logged to tell them apart
+			if (first || (Value != entry.m_LoggedValue && (!throttled || tick - entry.m_LoggedTick > 2000)))
+			{
+				spdlog::info(
+					"[fact] {} {} {} {} {}{} ctx={:#x}",
+					Call.m_Caller,
+					Write ? "Set" : "Get",
+					KindName(Kind),
+					GetFactLabel(Call.m_Fact),
+					Value,
+					Overridden ? " (overridden)" : "",
+					context);
+
+				entry.m_LoggedValue = Value;
+				entry.m_LoggedTick = tick;
+			}
+
+			if (entry.m_ChangedTick == 0 || entry.m_Value != Value)
+				entry.m_ChangedTick = tick;
+
+			entry.m_Value = std::move(Value);
+		}
+
 		//
 		// Fact API hooks
 		//
@@ -344,6 +519,94 @@ namespace HRZ2::GraphRuntime
 			return FindOverride(Range.m_Tag, uuid, Kind);
 		}
 
+		// Calls from code outside the watched graphs, for watched facts only
+		template<typename T, typename ApplyFn, typename FormatFn>
+		T WatchGet(void *ReturnAddress, void *Context, void *Fact, FactKind Kind, T Result, ApplyFn Apply, FormatFn Format)
+		{
+			if (auto call = WatchedCall(ReturnAddress, Fact))
+			{
+				const auto o = FindCallerOverride(*call, Kind);
+
+				if (o)
+					Apply(Result, *o);
+
+				ObserveWatched(*call, Context, Fact, Kind, false, o.has_value(), Format(Result), 0);
+			}
+
+			return Result;
+		}
+
+		void WatchSet(void *ReturnAddress, void *Context, void *Fact, FactKind Kind, std::string Value, float Number = 0, const double *Position = nullptr)
+		{
+			if (auto call = WatchedCall(ReturnAddress, Fact))
+				ObserveWatched(*call, Context, Fact, Kind, true, false, std::move(Value), Number, Position);
+		}
+
+		const auto ApplyBool = [](bool& R, const OverrideValue& O) { R = O.m_Bool; };
+		const auto ApplyInt = [](int& R, const OverrideValue& O) { R = O.m_Int; };
+		const auto ApplyFloat = [](float& R, const OverrideValue& O) { R = O.m_Float; };
+		const auto FormatBool = [](bool R) { return std::string(R ? "true" : "false"); };
+		const auto FormatInt = [](int R) { return std::to_string(R); };
+		const auto FormatFloat = [](float R) { return std::format("{:.3f}", R); };
+
+		void *ApplyEnumOverride(void *Fact, void *Result, std::optional<OverrideValue> O)
+		{
+			GGUUID current {};
+
+			if (!O || (O->m_OnlyWhenEntry && (!Result || !SafeReadUUID(Result, &current) || current != *O->m_OnlyWhenEntry)))
+				return Result;
+
+			auto entry = ResolveEnumEntry(Fact, O->m_EnumEntry);
+			return entry ? entry : Result;
+		}
+
+		void ApplyPositionOverride(double *Position, const std::optional<OverrideValue>& O)
+		{
+			if (!O)
+				return;
+
+			for (int i = 0; i < 3; i++)
+			{
+				if (O->m_PositionAxes[i])
+					Position[i] = O->m_Position[i];
+			}
+		}
+
+		void *WatchGetEnum(void *ReturnAddress, void *Context, void *Fact, void *Result)
+		{
+			if (auto call = WatchedCall(ReturnAddress, Fact))
+			{
+				const auto o = FindCallerOverride(*call, FactKind::Enum);
+				auto value = ApplyEnumOverride(Fact, Result, o);
+				ObserveWatched(*call, Context, Fact, FactKind::Enum, false, value != Result, EnumEntryName(value));
+				return value;
+			}
+
+			return Result;
+		}
+
+		void WatchGetPosition(void *ReturnAddress, void *Context, void *Fact, double *Position)
+		{
+			if (auto call = WatchedCall(ReturnAddress, Fact))
+			{
+				const auto o = FindCallerOverride(*call, FactKind::Position);
+				ApplyPositionOverride(Position, o);
+				ObserveWatched(
+					*call,
+					Context,
+					Fact,
+					FactKind::Position,
+					false,
+					o.has_value(),
+					std::format("{:.0f}, {:.0f}, {:.0f}", Position[0], Position[1], Position[2]),
+					0,
+					Position);
+			}
+		}
+
+		//
+		// Slot hooks: calls from graph programs in fullgame.dll
+		//
 		bool HookGetBool(void *Context, void *Fact)
 		{
 			auto result = g_GetBool(Context, Fact);
@@ -356,9 +619,10 @@ namespace HRZ2::GraphRuntime
 					result = o->m_Bool;
 
 				Observe(*range, Fact, FactKind::Bool, false, o.has_value(), result ? "true" : "false", result ? 1.0f : 0.0f);
+				return result;
 			}
 
-			return result;
+			return WatchGet(_ReturnAddress(), Context, Fact, FactKind::Bool, result, ApplyBool, FormatBool);
 		}
 
 		void *HookGetEnum(void *Context, void *Fact)
@@ -367,22 +631,12 @@ namespace HRZ2::GraphRuntime
 
 			if (auto range = FindRange(_ReturnAddress()))
 			{
-				auto o = LookupOverride(*range, Fact, FactKind::Enum);
-				GGUUID current {};
-
-				if (o && o->m_OnlyWhenEntry && (!result || !SafeReadUUID(result, &current) || current != *o->m_OnlyWhenEntry))
-					o.reset();
-
-				if (o)
-				{
-					if (auto entry = ResolveEnumEntry(Fact, o->m_EnumEntry))
-						result = entry;
-				}
-
-				Observe(*range, Fact, FactKind::Enum, false, o.has_value(), EnumEntryName(result));
+				auto value = ApplyEnumOverride(Fact, result, LookupOverride(*range, Fact, FactKind::Enum));
+				Observe(*range, Fact, FactKind::Enum, false, value != result, EnumEntryName(value));
+				return value;
 			}
 
-			return result;
+			return WatchGetEnum(_ReturnAddress(), Context, Fact, result);
 		}
 
 		int HookGetInt(void *Context, void *Fact)
@@ -397,9 +651,10 @@ namespace HRZ2::GraphRuntime
 					result = o->m_Int;
 
 				Observe(*range, Fact, FactKind::Int, false, o.has_value(), std::to_string(result), static_cast<float>(result));
+				return result;
 			}
 
-			return result;
+			return WatchGet(_ReturnAddress(), Context, Fact, FactKind::Int, result, ApplyInt, FormatInt);
 		}
 
 		float HookGetFloat(void *Context, void *Fact)
@@ -414,28 +669,21 @@ namespace HRZ2::GraphRuntime
 					result = o->m_Float;
 
 				Observe(*range, Fact, FactKind::Float, false, o.has_value(), std::format("{:.3f}", result), result);
+				return result;
 			}
 
-			return result;
+			return WatchGet(_ReturnAddress(), Context, Fact, FactKind::Float, result, ApplyFloat, FormatFloat);
 		}
 
 		void *HookGetPosition(void *Out, void *Context, void *Fact)
 		{
 			auto result = g_GetPosition(Out, Context, Fact);
+			auto position = static_cast<double *>(result ? result : Out);
 
 			if (auto range = FindRange(_ReturnAddress()))
 			{
-				auto position = static_cast<double *>(result ? result : Out);
 				const auto o = LookupOverride(*range, Fact, FactKind::Position);
-
-				if (o)
-				{
-					for (int i = 0; i < 3; i++)
-					{
-						if (o->m_PositionAxes[i])
-							position[i] = o->m_Position[i];
-					}
-				}
+				ApplyPositionOverride(position, o);
 
 				Observe(
 					*range,
@@ -446,8 +694,10 @@ namespace HRZ2::GraphRuntime
 					std::format("{:.0f}, {:.0f}, {:.0f}", position[0], position[1], position[2]),
 					0,
 					position);
+				return result;
 			}
 
+			WatchGetPosition(_ReturnAddress(), Context, Fact, position);
 			return result;
 		}
 
@@ -455,6 +705,8 @@ namespace HRZ2::GraphRuntime
 		{
 			if (auto range = FindRange(_ReturnAddress()))
 				Observe(*range, Fact, FactKind::Bool, true, false, Value ? "true" : "false", Value ? 1.0f : 0.0f);
+			else
+				WatchSet(_ReturnAddress(), Context, Fact, FactKind::Bool, FormatBool(Value), Value ? 1.0f : 0.0f);
 
 			return g_SetBool(Context, Fact, Value);
 		}
@@ -463,6 +715,8 @@ namespace HRZ2::GraphRuntime
 		{
 			if (auto range = FindRange(_ReturnAddress()))
 				Observe(*range, Fact, FactKind::Enum, true, false, EnumEntryName(Value));
+			else
+				WatchSet(_ReturnAddress(), Context, Fact, FactKind::Enum, EnumEntryName(Value));
 
 			return g_SetEnum(Context, Fact, Value);
 		}
@@ -471,6 +725,8 @@ namespace HRZ2::GraphRuntime
 		{
 			if (auto range = FindRange(_ReturnAddress()))
 				Observe(*range, Fact, FactKind::Int, true, false, std::to_string(Value), static_cast<float>(Value));
+			else
+				WatchSet(_ReturnAddress(), Context, Fact, FactKind::Int, std::to_string(Value), static_cast<float>(Value));
 
 			return g_SetInt(Context, Fact, Value);
 		}
@@ -479,19 +735,115 @@ namespace HRZ2::GraphRuntime
 		{
 			if (auto range = FindRange(_ReturnAddress()))
 				Observe(*range, Fact, FactKind::Float, true, false, std::format("{:.3f}", Value), Value);
+			else
+				WatchSet(_ReturnAddress(), Context, Fact, FactKind::Float, std::format("{:.3f}", Value), Value);
 
 			return g_SetFloat(Context, Fact, Value);
 		}
 
 		uint64_t HookSetPosition(void *Context, void *Fact, const void *Value)
 		{
+			const auto p = static_cast<const double *>(Value);
+			const auto text = std::format("{:.0f}, {:.0f}, {:.0f}", p[0], p[1], p[2]);
+
 			if (auto range = FindRange(_ReturnAddress()))
-			{
-				const auto p = static_cast<const double *>(Value);
-				Observe(*range, Fact, FactKind::Position, true, false, std::format("{:.0f}, {:.0f}, {:.0f}", p[0], p[1], p[2]), 0, p);
-			}
+				Observe(*range, Fact, FactKind::Position, true, false, text, 0, p);
+			else
+				WatchSet(_ReturnAddress(), Context, Fact, FactKind::Position, text, 0, p);
 
 			return g_SetPosition(Context, Fact, Value);
+		}
+
+		//
+		// Native hooks: the exe's fact functions, for calls from game code. Only watched facts are looked at.
+		//
+		bool NativeGetBool(void *Context, void *Fact)
+		{
+			return WatchGet(_ReturnAddress(), Context, Fact, FactKind::Bool, g_GetBool(Context, Fact), ApplyBool, FormatBool);
+		}
+
+		void *NativeGetEnum(void *Context, void *Fact)
+		{
+			return WatchGetEnum(_ReturnAddress(), Context, Fact, g_GetEnum(Context, Fact));
+		}
+
+		int NativeGetInt(void *Context, void *Fact)
+		{
+			return WatchGet(_ReturnAddress(), Context, Fact, FactKind::Int, g_GetInt(Context, Fact), ApplyInt, FormatInt);
+		}
+
+		float NativeGetFloat(void *Context, void *Fact)
+		{
+			return WatchGet(_ReturnAddress(), Context, Fact, FactKind::Float, g_GetFloat(Context, Fact), ApplyFloat, FormatFloat);
+		}
+
+		void *NativeGetPosition(void *Out, void *Context, void *Fact)
+		{
+			auto result = g_GetPosition(Out, Context, Fact);
+			WatchGetPosition(_ReturnAddress(), Context, Fact, static_cast<double *>(result ? result : Out));
+			return result;
+		}
+
+		uint64_t NativeSetBool(void *Context, void *Fact, bool Value)
+		{
+			WatchSet(_ReturnAddress(), Context, Fact, FactKind::Bool, FormatBool(Value), Value ? 1.0f : 0.0f);
+			return g_SetBool(Context, Fact, Value);
+		}
+
+		uint64_t NativeSetEnum(void *Context, void *Fact, void *Value)
+		{
+			WatchSet(_ReturnAddress(), Context, Fact, FactKind::Enum, EnumEntryName(Value));
+			return g_SetEnum(Context, Fact, Value);
+		}
+
+		uint64_t NativeSetInt(void *Context, void *Fact, int Value)
+		{
+			WatchSet(_ReturnAddress(), Context, Fact, FactKind::Int, std::to_string(Value), static_cast<float>(Value));
+			return g_SetInt(Context, Fact, Value);
+		}
+
+		uint64_t NativeSetFloat(void *Context, void *Fact, float Value)
+		{
+			WatchSet(_ReturnAddress(), Context, Fact, FactKind::Float, std::format("{:.3f}", Value), Value);
+			return g_SetFloat(Context, Fact, Value);
+		}
+
+		uint64_t NativeSetPosition(void *Context, void *Fact, const void *Value)
+		{
+			const auto p = static_cast<const double *>(Value);
+			WatchSet(_ReturnAddress(), Context, Fact, FactKind::Position, std::format("{:.0f}, {:.0f}, {:.0f}", p[0], p[1], p[2]), 0, p);
+			return g_SetPosition(Context, Fact, Value);
+		}
+
+		// Detours the exe functions behind the slots; the g_* pointers become trampolines used by every hook
+		void InstallNativeHooks()
+		{
+			auto attach = [](auto **Original, auto *Hook)
+			{
+				DetourAttach(reinterpret_cast<void **>(Original), reinterpret_cast<void *>(Hook));
+			};
+
+			DetourTransactionBegin();
+			DetourUpdateThread(GetCurrentThread());
+			attach(&g_GetBool, &NativeGetBool);
+			attach(&g_GetEnum, &NativeGetEnum);
+			attach(&g_GetInt, &NativeGetInt);
+			attach(&g_GetFloat, &NativeGetFloat);
+			attach(&g_GetPosition, &NativeGetPosition);
+			attach(&g_SetBool, &NativeSetBool);
+			attach(&g_SetEnum, &NativeSetEnum);
+			attach(&g_SetInt, &NativeSetInt);
+			attach(&g_SetFloat, &NativeSetFloat);
+			attach(&g_SetPosition, &NativeSetPosition);
+
+			if (const auto error = DetourTransactionCommit(); error != NO_ERROR)
+			{
+				spdlog::error("[graph] native fact hooks failed ({})", error);
+				return;
+			}
+
+			g_NativeInstalled = true;
+			spdlog::info("[graph] native fact hooks installed");
 		}
 
 		bool IsInsideModule(void *Address, HMODULE Module)
@@ -592,7 +944,7 @@ namespace HRZ2::GraphRuntime
 
 	void TryInstall()
 	{
-		if (g_Installed.load() || g_TagCount.load() == 0)
+		if (g_Installed.load() || (g_TagCount.load() == 0 && g_WatchedFactCount.load() == 0))
 			return;
 
 		const auto module = GetModuleHandleW(L"fullgame.dll");
@@ -601,6 +953,13 @@ namespace HRZ2::GraphRuntime
 			return;
 
 		g_Base = reinterpret_cast<uintptr_t>(module);
+
+		{
+			const auto exe = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
+			const auto nt = reinterpret_cast<const IMAGE_NT_HEADERS *>(exe + reinterpret_cast<const IMAGE_DOS_HEADER *>(exe)->e_lfanew);
+			g_ExeBase = exe;
+			g_ExeEnd = exe + nt->OptionalHeader.SizeOfImage;
+		}
 
 		// The exe fills the native API slots after the library loads
 		if (!*reinterpret_cast<void **>(g_Base + SlotGetBool))
@@ -640,6 +999,9 @@ namespace HRZ2::GraphRuntime
 
 		spdlog::info("[graph] installed: {} exported graph functions", g_Exports.size());
 		RescanCachedGraphsLocked();
+
+		if (ModConfiguration.NativeFactHooks)
+			InstallNativeHooks();
 	}
 
 	bool IsInstalled()
@@ -818,13 +1180,61 @@ namespace HRZ2::GraphRuntime
 			value);
 	}
 
+	void WatchFact(const GGUUID& Fact)
+	{
+		{
+			std::scoped_lock lock(g_Mutex);
+			const auto count = g_WatchedFactCount.load();
+
+			if (count >= MaxWatchedFacts || std::find(g_WatchedFacts.begin(), g_WatchedFacts.begin() + count, Fact) != g_WatchedFacts.begin() + count)
+				return;
+
+			g_WatchedFacts[count] = Fact;
+			g_WatchedFactCount.store(count + 1, std::memory_order_release);
+		}
+
+		TryInstall();
+	}
+
+	void UnwatchFact(const GGUUID& Fact)
+	{
+		std::scoped_lock lock(g_Mutex);
+		const auto count = g_WatchedFactCount.load();
+		std::vector<GGUUID> keep;
+
+		for (size_t i = 0; i < count; i++)
+		{
+			if (g_WatchedFacts[i] != Fact)
+				keep.emplace_back(g_WatchedFacts[i]);
+		}
+
+		// Shrink first so lock-free readers never see a stale tail
+		g_WatchedFactCount.store(0, std::memory_order_release);
+		std::copy(keep.begin(), keep.end(), g_WatchedFacts.begin());
+		g_WatchedFactCount.store(keep.size(), std::memory_order_release);
+	}
+
+	std::vector<GGUUID> GetWatchedFacts()
+	{
+		std::scoped_lock lock(g_Mutex);
+		return { g_WatchedFacts.begin(), g_WatchedFacts.begin() + g_WatchedFactCount.load() };
+	}
+
+	bool NativeHooksInstalled()
+	{
+		return g_NativeInstalled;
+	}
+
 	std::vector<ObservedFact> GetObservedFacts()
 	{
 		std::scoped_lock lock(g_ObservedMutex);
 		std::vector<ObservedFact> result;
-		result.reserve(g_Observed.size());
+		result.reserve(g_Observed.size() + g_WatchObserved.size());
 
 		for (const auto& [key, entry] : g_Observed)
+			result.emplace_back(entry);
+
+		for (const auto& [key, entry] : g_WatchObserved)
 			result.emplace_back(entry);
 
 		return result;
@@ -841,6 +1251,12 @@ namespace HRZ2::GraphRuntime
 				latest = &entry;
 		}
 
+		for (const auto& [key, entry] : g_WatchObserved)
+		{
+			if (entry.m_Fact == Fact && (!latest || entry.m_LastTick > latest->m_LastTick))
+				latest = &entry;
+		}
+
 		if (!latest)
 			return std::nullopt;
 
@@ -851,6 +1267,7 @@ namespace HRZ2::GraphRuntime
 	{
 		std::scoped_lock lock(g_ObservedMutex);
 		g_Observed.clear();
+		g_WatchObserved.clear();
 	}
 
 	void SetFactLabel(const GGUUID& Fact, std::string Label)
@@ -966,8 +1383,35 @@ namespace HRZ2::GraphRuntime
 
 	void LoadConfig()
 	{
+		SetFactLabel(GGUUID::Parse("B44A1CCD-7CC4-7A4E-A097-AB111E33552E"), "Is local called mount");
+		SetFactLabel(GGUUID::Parse("A6FA2D8F-4ED3-DC4E-AF22-007FD821270B"), "Is overridden (hacked)");
+		SetFactLabel(GGUUID::Parse("0A94E442-C4B4-2749-89BC-41A5170F4BD1"), "Overridden machine behavior mode");
+		SetFactLabel(GGUUID::Parse("1A73D727-5F54-244B-A8F9-3E18000BE8F4"), "Player override mode selection");
+		SetFactLabel(GGUUID::Parse("15819EB0-5AC2-A748-91E6-806C9273046E"), "Override target machine type");
+
+		// The hacking start script forces protective mode on Sunwings and Waterwings; let it see an untyped machine
+		if (ModConfiguration.AllowAggressiveFlyingMountOverride)
+		{
+			FactOverride o;
+			o.m_Graphs = { "HackingStartGraph_c4b070d94cecc0d8d07dc31bc9538e50" };
+			o.m_Fact = GGUUID::Parse("15819EB0-5AC2-A748-91E6-806C9273046E");
+			o.m_Value.m_Kind = FactKind::Enum;
+			o.m_Source = "flying-mount-aggressive";
+
+			WatchGraph(o.m_Graphs[0], false);
+			SetOverrides(o.m_Source, { o });
+		}
+
 		for (const auto& tag : ModConfiguration.WatchGraphs)
 			WatchGraph(tag, false);
+
+		for (const auto& fact : ModConfiguration.WatchFacts)
+		{
+			if (auto uuid = GGUUID::TryParse(fact))
+				WatchFact(*uuid);
+			else
+				spdlog::error("[graph] invalid WatchFacts entry '{}'", fact);
+		}
 
 		for (const auto& tag : ModConfiguration.TraceGraphs)
 		{
@@ -1009,9 +1453,14 @@ namespace HRZ2::GraphRuntime
 			o.m_Enabled = entry.Enabled;
 			o.m_Source = "config";
 
-			// Graph tags named by an override must be watched for it to apply
+			// Graph tags named by an override must be watched for it to apply; "native" needs the fact watched instead
 			for (const auto& tag : o.m_Graphs)
-				WatchGraph(tag, false);
+			{
+				if (Lower(tag).starts_with("native"))
+					WatchFact(o.m_Fact);
+				else
+					WatchGraph(tag, false);
+			}
 
 			overrides.emplace_back(std::move(o));
 		}

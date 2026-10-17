@@ -73,6 +73,39 @@ namespace HRZ2::DebugUI
 			}
 		}
 
+		// Facts watched for every caller
+		if (ImGui::CollapsingHeader("Watched facts (any script or native code)", ImGuiTreeNodeFlags_DefaultOpen))
+		{
+			ImGui::TextDisabled(
+				"Every read and write of these facts is logged with its caller. Native game code is included when NativeFactHooks is on (%s).",
+				NativeHooksInstalled() ? "active" : "off");
+
+			for (const auto& fact : GetWatchedFacts())
+			{
+				ImGui::PushID(&fact);
+				ImGui::BulletText("%s", GetFactLabel(fact).c_str());
+				ImGui::SameLine();
+
+				if (ImGui::SmallButton("Remove"))
+					UnwatchFact(fact);
+
+				ImGui::PopID();
+			}
+
+			ImGui::SetNextItemWidth(400);
+			ImGui::InputTextWithHint("##NewFact", "fact UUID", m_NewFact, sizeof(m_NewFact));
+			ImGui::SameLine();
+
+			if (ImGui::Button("Watch fact"))
+			{
+				if (auto uuid = GGUUID::TryParse(m_NewFact))
+				{
+					WatchFact(*uuid);
+					m_NewFact[0] = '\0';
+				}
+			}
+		}
+
 		// Overrides
 		if (ImGui::CollapsingHeader("Overrides", ImGuiTreeNodeFlags_DefaultOpen))
 		{
@@ -173,7 +206,10 @@ namespace HRZ2::DebugUI
 					ImGui::TableNextRow();
 
 					ImGui::TableNextColumn();
-					ImGui::TextUnformatted(f.m_Graph.substr(0, 32).c_str());
+					ImGui::TextUnformatted(f.m_Graph.substr(0, 48).c_str());
+
+					if (ImGui::IsItemHovered())
+						ImGui::SetTooltip("%s", f.m_Graph.c_str());
 
 					ImGui::TableNextColumn();
 					ImGui::TextUnformatted(label.c_str());

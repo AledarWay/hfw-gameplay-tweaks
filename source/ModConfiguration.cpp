@@ -163,6 +163,8 @@ namespace InternalModConfig
 
 			if (auto v = (*gameplay)["KeepSupercellsAfterAether"].value<bool>())
 				o.KeepSupercellsAfterAether = *v;
+
+			PARSE_TOML_MEMBER(gameplay, AllowAggressiveFlyingMountOverride);
 		}
 
 		auto parseStringArray = [](auto Node, std::vector<std::string>& Target)
@@ -183,6 +185,8 @@ namespace InternalModConfig
 			parseStringArray((*graphDebug)["WatchGraphs"], o.WatchGraphs);
 			parseStringArray((*graphDebug)["TraceGraphs"], o.TraceGraphs);
 			PARSE_TOML_MEMBER(graphDebug, TraceSupercells);
+			parseStringArray((*graphDebug)["WatchFacts"], o.WatchFacts);
+			PARSE_TOML_MEMBER(graphDebug, NativeFactHooks);
 		}
 
 		// [Supercells]

@@ -82,7 +82,14 @@ namespace HRZ2::GraphRuntime
 	std::vector<WatchedGraph> GetWatchedGraphs();
 	void *FindEntryPoint(std::string_view Name);
 
-	// Overrides
+	// Facts watched for every caller: any graph program, and native game code when native hooks are on
+	// ([GraphDebug] NativeFactHooks). Callers show up as entry point names or "native+0x<exe rva>".
+	void WatchFact(const GGUUID& Fact);
+	void UnwatchFact(const GGUUID& Fact);
+	std::vector<GGUUID> GetWatchedFacts();
+	bool NativeHooksInstalled();
+
+	// Overrides. For watched facts, graph filters also match caller names ("native" matches native code).
 	void AddOverride(FactOverride Override);
 	void SetOverrides(const std::string& Source, std::vector<FactOverride> Overrides);
 	void RemoveOverrides(const std::string& Source);

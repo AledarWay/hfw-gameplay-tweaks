@@ -76,11 +76,14 @@ namespace InternalModConfig
 		bool ForceNoShaderLoadingScreen;
 
 		bool KeepSupercellsAfterAether;
+		bool AllowAggressiveFlyingMountOverride;
 
 		// [GraphDebug]
 		std::vector<std::string> WatchGraphs;
 		std::vector<std::string> TraceGraphs;
 		bool TraceSupercells;
+		std::vector<std::string> WatchFacts;
+		bool NativeFactHooks;
 
 		// [Supercells]
 		bool SupercellIncludeAllLocations;
