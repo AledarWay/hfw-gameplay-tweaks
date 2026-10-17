@@ -76,6 +76,7 @@ namespace Htn
 			MarkMount,
 			FailIfMount,
 			PassIfMount,
+			FailWhileTesting,
 		};
 
 		constexpr size_t MaxConditionalCells = 16;
@@ -84,6 +85,7 @@ namespace Htn
 		thread_local void *g_MountWorldState = nullptr;
 
 		// pass-if-mount forces the condition in windows only, so the mount still picks other attacks in between
+		std::atomic_uint64_t g_MountActsAloneUntil = 0; // "fail-while-testing" cells fail until then
 		std::atomic_uint64_t g_PassWindowMs = 6000;
 		std::atomic_uint64_t g_PassCooldownMs = 12000;
 		std::array<std::atomic_uint64_t, MaxConditionalCells> g_PassWindowStart;
@@ -97,6 +99,12 @@ namespace Htn
 			if constexpr (K == CellKind::FailIfMount)
 			{
 				if (WorldState == g_MountWorldState)
+					return 0;
+			}
+
+			if constexpr (K == CellKind::FailWhileTesting)
+			{
+				if (GetTickCount64() < g_MountActsAloneUntil.load())
 					return 0;
 			}
 
@@ -132,6 +140,7 @@ namespace Htn
 		const auto MarkMountCells = MakeCellTable<CellKind::MarkMount>(std::make_index_sequence<MaxConditionalCells>());
 		const auto FailIfMountCells = MakeCellTable<CellKind::FailIfMount>(std::make_index_sequence<MaxConditionalCells>());
 		const auto PassIfMountCells = MakeCellTable<CellKind::PassIfMount>(std::make_index_sequence<MaxConditionalCells>());
+		const auto FailWhileTestingCells = MakeCellTable<CellKind::FailWhileTesting>(std::make_index_sequence<MaxConditionalCells>());
 
 		uintptr_t g_Base = 0;
 		std::atomic_bool g_Installed = false;
@@ -262,7 +271,8 @@ namespace Htn
 
 			if (P.m_Enabled && !P.m_Applied)
 			{
-				const bool conditional = P.m_Value == "mark-mount" || P.m_Value == "fail-if-mount" || P.m_Value == "pass-if-mount";
+				const bool conditional = P.m_Value == "mark-mount" || P.m_Value == "fail-if-mount" || P.m_Value == "pass-if-mount" ||
+										 P.m_Value == "fail-while-testing";
 				std::optional<uint64_t> value;
 
 				if (!SafeCopy(&P.m_Original, address, sizeof(uint64_t)))
@@ -285,7 +295,10 @@ namespace Htn
 					}
 
 					g_CellOriginals[P.m_Slot] = P.m_Original;
-					const auto& table = P.m_Value == "mark-mount" ? MarkMountCells : P.m_Value == "fail-if-mount" ? FailIfMountCells : PassIfMountCells;
+					const auto& table = P.m_Value == "mark-mount"		? MarkMountCells
+									 : P.m_Value == "fail-if-mount" ? FailIfMountCells
+									 : P.m_Value == "pass-if-mount" ? PassIfMountCells
+																	: FailWhileTestingCells;
 					value = reinterpret_cast<uint64_t>(table[P.m_Slot]);
 				}
 				else
@@ -770,6 +783,25 @@ namespace Htn
 				g_Patches.emplace_back(std::move(p));
 			}
 		}
+
+		// While ridden the mount only runs do_mounted (wait). Failing it for a moment lets the planner pick what an
+		// unridden mount would do, e.g. attack, to see how the game handles that with a rider.
+		constexpr std::pair<const char *, uint32_t> mountedCells[] = {
+			{ "sunwing", 0x2980 },
+			{ "sunwing", 0x29A0 },
+			{ "waterwing", 0x26D0 },
+			{ "waterwing", 0x26F0 },
+		};
+
+		for (const auto& [domain, offset] : mountedCells)
+		{
+			Patch p;
+			p.m_Domain = domain;
+			p.m_Offset = offset;
+			p.m_Value = "fail-while-testing";
+			p.m_Label = std::format("{}: test hook for do_mounted (+{:#x})", domain, offset);
+			g_Patches.emplace_back(std::move(p));
+		}
 	}
 
 	void TryInstall()
@@ -835,6 +867,19 @@ namespace Htn
 			if (p.m_Domain == Domains[d].m_Name && g_States[d].m_Pool)
 				ApplyPatchLocked(p, d, g_States[d].m_Pool);
 		}
+	}
+
+	void RequestMountActsAlone(uint32_t Milliseconds)
+	{
+		g_MountActsAloneUntil = GetTickCount64() + Milliseconds;
+		spdlog::info("[htn] ridden mount acts on its own for {} ms", Milliseconds);
+	}
+
+	uint32_t GetMountActsAloneRemaining()
+	{
+		const auto now = GetTickCount64();
+		const auto until = g_MountActsAloneUntil.load();
+		return until > now ? static_cast<uint32_t>(until - now) : 0;
 	}
 
 	void RequestDecisionTrace(uint32_t Milliseconds)

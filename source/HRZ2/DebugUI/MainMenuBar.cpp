@@ -434,6 +434,23 @@ namespace HRZ2::DebugUI
 			if (ImGui::MenuItem("Trace AI Decisions of Nearby Agents (8 s)"))
 				Htn::RequestDecisionTrace();
 
+			if (const auto remaining = Htn::GetMountActsAloneRemaining(); remaining > 0)
+				ImGui::MenuItem(std::format("Ridden mount acts on its own: {:.1f} s left", remaining / 1000.0f).c_str(), nullptr, false, false);
+
+			if (ImGui::BeginMenu("Test: Let the Ridden Mount Act on Its Own"))
+			{
+				for (const uint32_t seconds : { 3u, 5u, 10u })
+				{
+					if (ImGui::MenuItem(std::format("For {} s", seconds).c_str()))
+						Htn::RequestMountActsAlone(seconds * 1000);
+				}
+
+				if (ImGui::MenuItem("Stop"))
+					Htn::RequestMountActsAlone(0);
+
+				ImGui::EndMenu();
+			}
+
 			const auto patches = Htn::GetPatches();
 
 			for (size_t i = 0; i < patches.size(); i++)

@@ -23,7 +23,7 @@ namespace Htn
 		bool m_Enabled = true;
 		std::string m_Domain;
 		uint32_t m_Offset = 0; // Byte offset in the pool
-		std::string m_Value;   // Number, "pred:<name>", "sym:<name>", "fail", "mark-mount", "fail-if-mount" or "pass-if-mount"
+		std::string m_Value;   // Number, "pred:<name>", "sym:<name>", "fail", "mark-mount", "fail-if-mount", "pass-if-mount" or "fail-while-testing"
 		std::string m_Label;   // Shown in the menu, empty for [[HTNPatch]] entries
 		bool m_Applied = false;
 		uint64_t m_Original = 0;
@@ -43,4 +43,8 @@ namespace Htn
 
 	// Records which code cells (methods, subtasks, primitives) each agent runs during the next few seconds
 	void RequestDecisionTrace(uint32_t Milliseconds = 8000);
+
+	// Test: while ridden, skip do_mounted so the mount's AI picks its own plan (e.g. an attack)
+	void RequestMountActsAlone(uint32_t Milliseconds);
+	uint32_t GetMountActsAloneRemaining();
 }
