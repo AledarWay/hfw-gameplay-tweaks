@@ -88,6 +88,23 @@ namespace InternalModConfig
 		bool AllowAggressiveFlyingMountOverride;
 		bool CalledFlyingMountFights;
 
+		// [FlyingMountAI]
+		struct
+		{
+			bool Sunwing;
+			bool Waterwing;
+			bool SkipIdleInAir;
+			bool SkipIdleLanded;
+			bool SkipIdleInWater;
+			bool SkipGoToHackerLanded;
+			bool SkipSwimNearHacker;
+			bool SkipWholeLandedBranch;
+			bool NoLandingNextToTarget;
+			bool FlyingRangedAttack;
+			double RangedAttackWindow;
+			double RangedAttackCooldown;
+		} FlyingMountAI;
+
 		// [GraphDebug]
 		std::vector<std::string> WatchGraphs;
 		std::vector<std::string> TraceGraphs;

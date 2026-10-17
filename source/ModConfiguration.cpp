@@ -180,6 +180,29 @@ namespace InternalModConfig
 			}
 		};
 
+		// [FlyingMountAI]
+		{
+			const auto t = Table["FlyingMountAI"].as_table();
+			auto get = [&](const char *Name, auto Default)
+			{
+				return t ? (*t)[Name].value_or(Default) : Default;
+			};
+
+			auto& f = o.FlyingMountAI;
+			f.Sunwing = get("Sunwing", true);
+			f.Waterwing = get("Waterwing", true);
+			f.SkipIdleInAir = get("SkipIdleInAir", true);
+			f.SkipIdleLanded = get("SkipIdleLanded", true);
+			f.SkipIdleInWater = get("SkipIdleInWater", true);
+			f.SkipGoToHackerLanded = get("SkipGoToHackerLanded", false);
+			f.SkipSwimNearHacker = get("SkipSwimNearHacker", false);
+			f.SkipWholeLandedBranch = get("SkipWholeLandedBranch", false);
+			f.NoLandingNextToTarget = get("NoLandingNextToTarget", true);
+			f.FlyingRangedAttack = get("FlyingRangedAttack", true);
+			f.RangedAttackWindow = get("RangedAttackWindow", 6.0);
+			f.RangedAttackCooldown = get("RangedAttackCooldown", 12.0);
+		}
+
 		// [GraphDebug]
 		if (auto graphDebug = Table["GraphDebug"].as_table())
 		{

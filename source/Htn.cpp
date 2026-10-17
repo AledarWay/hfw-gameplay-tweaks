@@ -1,6 +1,8 @@
 #include <Windows.h>
 #include <detours/detours.h>
 #include <array>
+#include <string_view>
+#include <algorithm>
 #include <atomic>
 #include <charconv>
 #include <cmath>
@@ -82,8 +84,8 @@ namespace Htn
 		thread_local void *g_MountWorldState = nullptr;
 
 		// pass-if-mount forces the condition in windows only, so the mount still picks other attacks in between
-		constexpr uint64_t PassWindowMs = 6000;
-		constexpr uint64_t PassCooldownMs = 12000;
+		std::atomic_uint64_t g_PassWindowMs = 6000;
+		std::atomic_uint64_t g_PassCooldownMs = 12000;
 		std::array<std::atomic_uint64_t, MaxConditionalCells> g_PassWindowStart;
 
 		template<CellKind K, size_t N>
@@ -103,13 +105,15 @@ namespace Htn
 				const auto now = GetTickCount64();
 				auto start = g_PassWindowStart[N].load();
 
-				if (now - start >= PassWindowMs + PassCooldownMs)
+				const auto window = g_PassWindowMs.load();
+
+				if (now - start >= window + g_PassCooldownMs.load())
 				{
 					g_PassWindowStart[N] = now;
 					start = now;
 				}
 
-				if (WorldState == g_MountWorldState && now - start < PassWindowMs)
+				if (WorldState == g_MountWorldState && now - start < window)
 				{
 					const auto next = *reinterpret_cast<uint64_t **>(reinterpret_cast<uintptr_t>(Frame) + 0x10);
 					return reinterpret_cast<CellFn>(*next)(Planner, WorldState, next, R9);
@@ -708,55 +712,58 @@ namespace Htn
 
 		if (ModConfiguration.CalledFlyingMountFights)
 		{
-			// The Sunwing behavior picks "player's mount" before combat: when that method finds anything to do, the
-			// mount never reaches circle_combat. Failing its idle alternatives lets the planner fall through to combat,
-			// the same path a second overridden Sunwing takes. Calling, pick-up and riding are separate alternatives.
+			// Flying mounts pick "player's mount" before combat: when that method finds anything to do, the mount never
+			// reaches circle_combat. Failing its idle alternatives lets the planner fall through to combat, the same
+			// path a second overridden mount takes. Calling, pick-up and riding are separate alternatives.
+			const auto& c = ModConfiguration.FlyingMountAI;
+
+			g_PassWindowMs = static_cast<uint64_t>(std::max(c.RangedAttackWindow, 0.0) * 1000.0);
+			g_PassCooldownMs = static_cast<uint64_t>(std::max(c.RangedAttackCooldown, 0.0) * 1000.0);
+
 			struct Preset
 			{
+				const char *m_Domain;
 				uint32_t m_Offset;
+				const char *m_Value;
 				bool m_Enabled;
 				const char *m_Label;
 			};
 
-			constexpr Preset presets[] = {
-				{ 0x24C18, true, "Sunwing: in the air, skip go_to_hacker/glide_patrol" },
-				{ 0x24C50, true, "Sunwing: in the air, skip wait_hacked (continue)" },
-				{ 0x24C70, true, "Sunwing: in the air, skip wait_hacked (begin)" },
-				{ 0x24FE0, true, "Sunwing: landed, skip wait_hacked (continue)" },
-				{ 0x25000, true, "Sunwing: landed, skip wait_hacked (begin)" },
-				{ 0x24F10, false, "Sunwing: landed, skip go_to_hacker" },
-				{ 0x194F0, false, "Sunwing: landed, skip the whole mount branch (calling while landed may break)" },
-			};
+			const Preset presets[] = {
+				{ "sunwing", 0xBFD0, "mark-mount", true, "Sunwing: detect the called mount" },
+				{ "sunwing", 0x24C18, "fail", c.SkipIdleInAir, "Sunwing: in the air, skip go_to_hacker/glide_patrol" },
+				{ "sunwing", 0x24C50, "fail", c.SkipIdleInAir, "Sunwing: in the air, skip wait_hacked (continue)" },
+				{ "sunwing", 0x24C70, "fail", c.SkipIdleInAir, "Sunwing: in the air, skip wait_hacked (begin)" },
+				{ "sunwing", 0x24FE0, "fail", c.SkipIdleLanded, "Sunwing: landed, skip wait_hacked (continue)" },
+				{ "sunwing", 0x25000, "fail", c.SkipIdleLanded, "Sunwing: landed, skip wait_hacked (begin)" },
+				{ "sunwing", 0x24F10, "fail", c.SkipGoToHackerLanded, "Sunwing: landed, skip go_to_hacker" },
+				{ "sunwing", 0x194F0, "fail", c.SkipWholeLandedBranch, "Sunwing: landed, skip the whole mount branch" },
+				{ "sunwing", 0x49E48, "fail-if-mount", c.NoLandingNextToTarget, "Sunwing mount: don't land next to the target" },
+				{ "sunwing", 0x497A0, "pass-if-mount", c.FlyingRangedAttack, "Sunwing mount: allow the flying plasma barrage" },
 
-			// circle_combat may land next to the threat; against flying targets the mount lands and takes off again
-			struct ConditionalPreset
-			{
-				uint32_t m_Offset;
-				const char *m_Value;
-				const char *m_Label;
-			};
-
-			constexpr ConditionalPreset conditional[] = {
-				{ 0xBFD0, "mark-mount", "Sunwing: detect the called mount (needed by the item below)" },
-				{ 0x49E48, "fail-if-mount", "Sunwing mount: don't land next to the target" },
-				{ 0x497A0, "pass-if-mount", "Sunwing mount: allow the flying plasma barrage (6 s of every 18 s)" },
+				{ "waterwing", 0xAFE0, "mark-mount", true, "Waterwing: detect the called mount" },
+				{ "waterwing", 0x21A48, "fail", c.SkipIdleInAir, "Waterwing: in the air, skip wait_hacked (continue)" },
+				{ "waterwing", 0x21A68, "fail", c.SkipIdleInAir, "Waterwing: in the air, skip wait_hacked (begin)" },
+				{ "waterwing", 0x22200, "fail", c.SkipIdleLanded, "Waterwing: landed, skip wait_hacked (continue)" },
+				{ "waterwing", 0x22220, "fail", c.SkipIdleLanded, "Waterwing: landed, skip wait_hacked (begin)" },
+				{ "waterwing", 0x22130, "fail", c.SkipGoToHackerLanded, "Waterwing: landed, skip go_to_hacker" },
+				{ "waterwing", 0x21E70, "fail", c.SkipIdleInWater, "Waterwing: in water, skip wait_hacked (continue)" },
+				{ "waterwing", 0x21E90, "fail", c.SkipIdleInWater, "Waterwing: in water, skip wait_hacked (begin)" },
+				{ "waterwing", 0x21E08, "fail", c.SkipSwimNearHacker, "Waterwing: in water, skip swim_near_hacker_and_wait" },
+				{ "waterwing", 0x30F98, "fail-if-mount", c.NoLandingNextToTarget, "Waterwing mount: don't land next to the target" },
+				{ "waterwing", 0x513F8, "pass-if-mount", c.FlyingRangedAttack, "Waterwing mount: allow the flying gravel spit" },
 			};
 
 			for (const auto& preset : presets)
 			{
+				const bool sunwing = std::string_view(preset.m_Domain) == "sunwing";
+
+				if (!(sunwing ? c.Sunwing : c.Waterwing))
+					continue;
+
 				Patch p;
 				p.m_Enabled = preset.m_Enabled;
-				p.m_Domain = "sunwing";
-				p.m_Offset = preset.m_Offset;
-				p.m_Value = "fail";
-				p.m_Label = preset.m_Label;
-				g_Patches.emplace_back(std::move(p));
-			}
-
-			for (const auto& preset : conditional)
-			{
-				Patch p;
-				p.m_Domain = "sunwing";
+				p.m_Domain = preset.m_Domain;
 				p.m_Offset = preset.m_Offset;
 				p.m_Value = preset.m_Value;
 				p.m_Label = preset.m_Label;
