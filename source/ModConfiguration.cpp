@@ -124,10 +124,10 @@ namespace InternalModConfig
 			PARSE_TOML_MEMBER(general, AssetDumpTypes);
 			PARSE_TOML_MEMBER(general, AssetDumpDepth);
 			PARSE_TOML_MEMBER(general, GraphScanKeywords);
-			PARSE_TOML_MEMBER(general, SupercellFactDecoys);
-			PARSE_TOML_MEMBER(general, SupercellDecoysEarly);
-			PARSE_TOML_MEMBER(general, SupercellTrace);
-			PARSE_TOML_MEMBER(general, KeepSupercellsAfterAether);
+
+			// Older configs had this under [General]
+			if (auto v = (*general)["KeepSupercellsAfterAether"].value<bool>())
+				o.KeepSupercellsAfterAether = *v;
 		}
 
 		if (o.DebugMenuFontScale <= 0.0f)
@@ -160,6 +160,59 @@ namespace InternalModConfig
 
 			PARSE_TOML_MEMBER(gameplay, ForceCustomUltraHard);
 			PARSE_TOML_MEMBER(gameplay, ForceNoShaderLoadingScreen);
+
+			if (auto v = (*gameplay)["KeepSupercellsAfterAether"].value<bool>())
+				o.KeepSupercellsAfterAether = *v;
+		}
+
+		auto parseStringArray = [](auto Node, std::vector<std::string>& Target)
+		{
+			if (auto a = Node.as_array())
+			{
+				for (const auto& e : *a)
+				{
+					if (auto v = e.value<std::string>())
+						Target.emplace_back(*v);
+				}
+			}
+		};
+
+		// [GraphDebug]
+		if (auto graphDebug = Table["GraphDebug"].as_table())
+		{
+			parseStringArray((*graphDebug)["WatchGraphs"], o.WatchGraphs);
+			parseStringArray((*graphDebug)["TraceGraphs"], o.TraceGraphs);
+			PARSE_TOML_MEMBER(graphDebug, TraceSupercells);
+		}
+
+		// [[FactOverride]]
+		if (auto factOverrideArray = Table["FactOverride"].as_array())
+		{
+			factOverrideArray->for_each(
+				[&](const toml::table& t)
+				{
+					FactOverride f;
+					f.Enabled = t["Enable"].value_or(true);
+					f.Fact = std::string(t["Fact"].value_or(""));
+					f.Type = std::string(t["Type"].value_or(""));
+
+					// Value may be written as a string, bool or number
+					if (auto v = t["Value"].value<std::string>())
+						f.Value = *v;
+					else if (auto b = t["Value"].value<bool>())
+						f.Value = *b ? "true" : "false";
+					else if (auto i = t["Value"].as_integer())
+						f.Value = std::to_string(i->get());
+					else if (auto d = t["Value"].as_floating_point())
+						f.Value = std::to_string(d->get());
+
+					if (auto graph = t["Graphs"].value<std::string>())
+						f.Graphs.emplace_back(*graph);
+					else
+						parseStringArray(t["Graphs"], f.Graphs);
+
+					o.FactOverrides.emplace_back(std::move(f));
+				});
 		}
 
 		// [Hotkeys]

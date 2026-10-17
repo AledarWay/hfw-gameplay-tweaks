@@ -14,6 +14,15 @@ namespace InternalModConfig
 		std::string Value;
 	};
 
+	struct FactOverride
+	{
+		bool Enabled = true;
+		std::vector<std::string> Graphs;
+		std::string Fact;
+		std::string Type;
+		std::string Value;
+	};
+
 	struct GlobalSettings
 	{
 		GlobalSettings() = default;
@@ -27,10 +36,6 @@ namespace InternalModConfig
 		std::string AssetDumpTypes;
 		int AssetDumpDepth;
 		std::string GraphScanKeywords;
-		std::string SupercellFactDecoys;
-		bool SupercellDecoysEarly;
-		bool SupercellTrace;
-		bool KeepSupercellsAfterAether;
 
 		// [Gameplay]
 		bool UnlockMapBoundaries;
@@ -57,6 +62,16 @@ namespace InternalModConfig
 
 		bool ForceCustomUltraHard;
 		bool ForceNoShaderLoadingScreen;
+
+		bool KeepSupercellsAfterAether;
+
+		// [GraphDebug]
+		std::vector<std::string> WatchGraphs;
+		std::vector<std::string> TraceGraphs;
+		bool TraceSupercells;
+
+		// [[FactOverride]]
+		std::vector<FactOverride> FactOverrides;
 
 		// [Hotkeys]
 		struct

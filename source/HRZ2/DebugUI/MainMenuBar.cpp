@@ -21,9 +21,9 @@
 #include "MainMenuBar.h"
 #include "PlayerInventoryWindow.h"
 #include "WeatherSetupWindow.h"
-#include "LocalWeatherWindow.h"
+#include "GraphFactsWindow.h"
+#include "SupercellWindow.h"
 #include "../GraphScanner.h"
-#include "../../SupercellDecoys.h"
 
 namespace HRZ2::DebugUI
 {
@@ -299,8 +299,8 @@ namespace HRZ2::DebugUI
 		if (ImGui::MenuItem("Weather Setup..."))
 			AddWindow(std::make_shared<WeatherSetupWindow>());
 
-		if (ImGui::MenuItem("Local Weather (Supercells)..."))
-			AddWindow(std::make_shared<LocalWeatherWindow>());
+		if (ImGui::MenuItem("Supercell Storms..."))
+			AddWindow(std::make_shared<SupercellWindow>());
 
 		ImGui::MenuItem("##sep2", nullptr, nullptr, false);
 		ImGui::MenuItem("Simulate Game Completed", nullptr, &debugSettings->m_SPAllUnlocked);
@@ -349,8 +349,8 @@ namespace HRZ2::DebugUI
 		if (ImGui::MenuItem("Scan Graph Programs (graph_scan.txt)"))
 			GraphScanner::ScanCachedGraphPrograms();
 
-		if (ImGui::MenuItem("Apply Supercell Fact Decoys"))
-			SupercellDecoys::ApplyNow();
+		if (ImGui::MenuItem("Graph Facts (watch/override)..."))
+			AddWindow(std::make_shared<GraphFactsWindow>());
 
 #if 0
 		if (ImGui::MenuItem("Dump Fullgame Typeinfo", nullptr, false, false))

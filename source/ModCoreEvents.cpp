@@ -13,8 +13,8 @@
 #include "ModConfiguration.h"
 #include "ModCoreEvents.h"
 #include "HRZ2/RTTIScanner.h"
-#include "SupercellDecoys.h"
-#include "SupercellTrace.h"
+#include "HRZ2/GraphRuntime.h"
+#include "Supercells.h"
 
 ModCoreEvents::ValuePatchVisitor::ValuePatchVisitor(const RTTIValuePatch& Patch)
 {
@@ -484,22 +484,17 @@ void ModCoreEvents::RegisterHardcodedPatches()
 	RegisterCacheCallback("WeatherSetupDLC", m_CachedWeatherSetups);
 	RegisterCacheCallback("LocalWeatherSetup", m_CachedWeatherSetups);
 
-	RegisterCacheCallback("LocalWeather", m_CachedLocalWeathers);
-	RegisterCacheCallback("WeatherSystem", m_CachedWeatherSystems);
 	RegisterCacheCallback("GraphProgramResource", m_CachedGraphPrograms);
 
 	addCallback(
-		RTTI::FindTypeByName("NodeConstantsResource"),
+		RTTI::FindTypeByName("GraphProgramResource"),
 		[](auto& Object)
 		{
-			SupercellDecoys::OnHolderLoaded(Object.GetPtr());
+			GraphRuntime::OnGraphProgramLoaded(Object.GetPtr());
 		});
-	addUnloadCallback(
-		RTTI::FindTypeByName("NodeConstantsResource"),
-		[](auto& Object)
-		{
-			SupercellDecoys::OnHolderUnloaded(Object.GetPtr());
-		});
+
+	GraphRuntime::LoadConfig();
+	Supercells::Initialize();
 
 	RegisterCacheCallback("InventoryItemResource", m_CachedInventoryItems);
 
@@ -542,8 +537,8 @@ void ModCoreEvents::OnFinishLoadGroup(const HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRefO
 	if (ModConfiguration.EnableAssetLogging)
 		spdlog::info("OnFinishLoadGroup");
 
-	SupercellDecoys::ApplyPending();
-	SupercellTrace::TryInstall();
+	HRZ2::GraphRuntime::TryInstall();
+	Supercells::TryInstall();
 }
 
 void ModCoreEvents::OnBeforeUnloadGroup(const HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRefObject>>& Objects)
