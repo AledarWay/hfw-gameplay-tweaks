@@ -81,6 +81,11 @@ namespace Htn
 		size_t g_UsedConditionalCells = 0;
 		thread_local void *g_MountWorldState = nullptr;
 
+		// pass-if-mount forces the condition in windows only, so the mount still picks other attacks in between
+		constexpr uint64_t PassWindowMs = 6000;
+		constexpr uint64_t PassCooldownMs = 12000;
+		std::array<std::atomic_uint64_t, MaxConditionalCells> g_PassWindowStart;
+
 		template<CellKind K, size_t N>
 		uint64_t ConditionalCell(void *Planner, void *WorldState, void *Frame, void *R9)
 		{
@@ -95,7 +100,16 @@ namespace Htn
 
 			if constexpr (K == CellKind::PassIfMount)
 			{
-				if (WorldState == g_MountWorldState)
+				const auto now = GetTickCount64();
+				auto start = g_PassWindowStart[N].load();
+
+				if (now - start >= PassWindowMs + PassCooldownMs)
+				{
+					g_PassWindowStart[N] = now;
+					start = now;
+				}
+
+				if (WorldState == g_MountWorldState && now - start < PassWindowMs)
 				{
 					const auto next = *reinterpret_cast<uint64_t **>(reinterpret_cast<uintptr_t>(Frame) + 0x10);
 					return reinterpret_cast<CellFn>(*next)(Planner, WorldState, next, R9);
@@ -725,7 +739,7 @@ namespace Htn
 			constexpr ConditionalPreset conditional[] = {
 				{ 0xBFD0, "mark-mount", "Sunwing: detect the called mount (needed by the item below)" },
 				{ 0x49E48, "fail-if-mount", "Sunwing mount: don't land next to the target" },
-				{ 0x497A0, "pass-if-mount", "Sunwing mount: allow the flying plasma barrage (shoot_from_distance)" },
+				{ 0x497A0, "pass-if-mount", "Sunwing mount: allow the flying plasma barrage (6 s of every 18 s)" },
 			};
 
 			for (const auto& preset : presets)
