@@ -24,6 +24,14 @@ namespace InternalModConfig
 		bool WriteBack = false;
 	};
 
+	struct HtnPatch
+	{
+		bool Enabled = true;
+		std::string Domain;
+		std::string Offset;
+		std::string Value;
+	};
+
 	struct SupercellLocation
 	{
 		bool Enabled = true;
@@ -85,6 +93,10 @@ namespace InternalModConfig
 		bool TraceSupercells;
 		std::vector<std::string> WatchFacts;
 		bool NativeFactHooks;
+		bool HtnDebug;
+
+		// [[HTNPatch]]
+		std::vector<HtnPatch> HtnPatches;
 
 		// [Supercells]
 		bool SupercellIncludeAllLocations;

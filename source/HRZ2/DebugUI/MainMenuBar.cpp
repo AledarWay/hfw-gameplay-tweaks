@@ -27,6 +27,7 @@
 #include "SupercellWindow.h"
 #include "../GraphScanner.h"
 #include "../GraphRuntime.h"
+#include "../../Htn.h"
 #include "../../Supercells.h"
 
 namespace HRZ2::DebugUI
@@ -414,6 +415,35 @@ namespace HRZ2::DebugUI
 				events.DumpObject(setup.GetPtr(), "cached");
 
 			spdlog::info("Dumped {} spawn setups to asset_dump.txt", setups.size());
+		}
+
+		if (ImGui::BeginMenu("Flying Mount AI (HTN)"))
+		{
+			for (const auto& d : Htn::GetDomains())
+			{
+				ImGui::MenuItem(
+					std::format("{}: {}, pool {:#x}, {} agents, {} patches", d.m_Name, d.m_Hooked ? "hooked" : "not hooked", d.m_Pool, d.m_Agents, d.m_PatchesApplied).c_str(),
+					nullptr,
+					false,
+					false);
+			}
+
+			if (ImGui::MenuItem("Dump AI World State of Nearby Agents (3 s)"))
+				Htn::RequestWorldStateDump();
+
+			const auto patches = Htn::GetPatches();
+
+			for (size_t i = 0; i < patches.size(); i++)
+			{
+				const auto& p = patches[i];
+				bool enabled = p.m_Enabled;
+				const auto label = std::format("{} +{:#x} = {}{}##htn{}", p.m_Domain, p.m_Offset, p.m_Value, p.m_Error.empty() ? "" : " (" + p.m_Error + ")", i);
+
+				if (ImGui::MenuItem(label.c_str(), nullptr, &enabled))
+					Htn::SetPatchEnabled(i, enabled);
+			}
+
+			ImGui::EndMenu();
 		}
 
 		if (ImGui::MenuItem("Scan Graph Programs (graph_scan.txt)"))

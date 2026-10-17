@@ -187,6 +187,7 @@ namespace InternalModConfig
 			PARSE_TOML_MEMBER(graphDebug, TraceSupercells);
 			parseStringArray((*graphDebug)["WatchFacts"], o.WatchFacts);
 			PARSE_TOML_MEMBER(graphDebug, NativeFactHooks);
+			PARSE_TOML_MEMBER(graphDebug, HtnDebug);
 		}
 
 		// [Supercells]
@@ -227,6 +228,30 @@ namespace InternalModConfig
 					l.Outer = t["Outer"].value_or(0.0f);
 					l.Template = t["Template"].value_or(-1);
 					o.SupercellLocations.emplace_back(l);
+				});
+		}
+
+		// [[HTNPatch]]
+		if (auto htnArray = Table["HTNPatch"].as_array())
+		{
+			htnArray->for_each(
+				[&](const toml::table& t)
+				{
+					HtnPatch h;
+					h.Enabled = t["Enable"].value_or(true);
+					h.Domain = std::string(t["Domain"].value_or(""));
+
+					if (auto v = t["Offset"].value<std::string>())
+						h.Offset = *v;
+					else if (auto i = t["Offset"].as_integer())
+						h.Offset = std::to_string(i->get());
+
+					if (auto v = t["Value"].value<std::string>())
+						h.Value = *v;
+					else if (auto i = t["Value"].as_integer())
+						h.Value = std::to_string(i->get());
+
+					o.HtnPatches.emplace_back(std::move(h));
 				});
 		}
 
