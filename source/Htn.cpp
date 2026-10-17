@@ -65,38 +65,55 @@ namespace Htn
 		}
 
 		// Cells that depend on the agent: "mark-mount" remembers which world state reached the player's mount
-		// branch, "fail-if-mount" fails only for that agent. Code cells get (planner, world state, frame).
+		// branch, "fail-if-mount" fails only for that agent and "pass-if-mount" makes a condition succeed for it.
+		// Code cells get (planner, world state, frame); a condition's frame holds its continuation at +0x10.
 		using CellFn = uint64_t (*)(void *, void *, void *, void *);
+
+		enum class CellKind
+		{
+			MarkMount,
+			FailIfMount,
+			PassIfMount,
+		};
 
 		constexpr size_t MaxConditionalCells = 16;
 		std::array<std::atomic_uint64_t, MaxConditionalCells> g_CellOriginals;
 		size_t g_UsedConditionalCells = 0;
 		thread_local void *g_MountWorldState = nullptr;
 
-		template<size_t N>
-		uint64_t MarkMountCell(void *Planner, void *WorldState, void *Frame, void *R9)
+		template<CellKind K, size_t N>
+		uint64_t ConditionalCell(void *Planner, void *WorldState, void *Frame, void *R9)
 		{
-			g_MountWorldState = WorldState;
+			if constexpr (K == CellKind::MarkMount)
+				g_MountWorldState = WorldState;
+
+			if constexpr (K == CellKind::FailIfMount)
+			{
+				if (WorldState == g_MountWorldState)
+					return 0;
+			}
+
+			if constexpr (K == CellKind::PassIfMount)
+			{
+				if (WorldState == g_MountWorldState)
+				{
+					const auto next = *reinterpret_cast<uint64_t **>(reinterpret_cast<uintptr_t>(Frame) + 0x10);
+					return reinterpret_cast<CellFn>(*next)(Planner, WorldState, next, R9);
+				}
+			}
+
 			return reinterpret_cast<CellFn>(g_CellOriginals[N].load())(Planner, WorldState, Frame, R9);
 		}
 
-		template<size_t N>
-		uint64_t FailIfMountCell(void *Planner, void *WorldState, void *Frame, void *R9)
+		template<CellKind K, size_t... I>
+		constexpr auto MakeCellTable(std::index_sequence<I...>)
 		{
-			if (WorldState == g_MountWorldState)
-				return 0;
-
-			return reinterpret_cast<CellFn>(g_CellOriginals[N].load())(Planner, WorldState, Frame, R9);
+			return std::array<CellFn, sizeof...(I)> { &ConditionalCell<K, I>... };
 		}
 
-		template<size_t... I>
-		constexpr auto MakeCellTable(bool Mark, std::index_sequence<I...>)
-		{
-			return std::array<CellFn, sizeof...(I)> { (Mark ? &MarkMountCell<I> : &FailIfMountCell<I>)... };
-		}
-
-		const auto MarkMountCells = MakeCellTable(true, std::make_index_sequence<MaxConditionalCells>());
-		const auto FailIfMountCells = MakeCellTable(false, std::make_index_sequence<MaxConditionalCells>());
+		const auto MarkMountCells = MakeCellTable<CellKind::MarkMount>(std::make_index_sequence<MaxConditionalCells>());
+		const auto FailIfMountCells = MakeCellTable<CellKind::FailIfMount>(std::make_index_sequence<MaxConditionalCells>());
+		const auto PassIfMountCells = MakeCellTable<CellKind::PassIfMount>(std::make_index_sequence<MaxConditionalCells>());
 
 		uintptr_t g_Base = 0;
 		std::atomic_bool g_Installed = false;
@@ -227,7 +244,7 @@ namespace Htn
 
 			if (P.m_Enabled && !P.m_Applied)
 			{
-				const bool conditional = P.m_Value == "mark-mount" || P.m_Value == "fail-if-mount";
+				const bool conditional = P.m_Value == "mark-mount" || P.m_Value == "fail-if-mount" || P.m_Value == "pass-if-mount";
 				std::optional<uint64_t> value;
 
 				if (!SafeCopy(&P.m_Original, address, sizeof(uint64_t)))
@@ -250,7 +267,7 @@ namespace Htn
 					}
 
 					g_CellOriginals[P.m_Slot] = P.m_Original;
-					const auto& table = P.m_Value == "mark-mount" ? MarkMountCells : FailIfMountCells;
+					const auto& table = P.m_Value == "mark-mount" ? MarkMountCells : P.m_Value == "fail-if-mount" ? FailIfMountCells : PassIfMountCells;
 					value = reinterpret_cast<uint64_t>(table[P.m_Slot]);
 				}
 				else
@@ -708,6 +725,7 @@ namespace Htn
 			constexpr ConditionalPreset conditional[] = {
 				{ 0xBFD0, "mark-mount", "Sunwing: detect the called mount (needed by the item below)" },
 				{ 0x49E48, "fail-if-mount", "Sunwing mount: don't land next to the target" },
+				{ 0x497A0, "pass-if-mount", "Sunwing mount: allow the flying plasma barrage (shoot_from_distance)" },
 			};
 
 			for (const auto& preset : presets)
