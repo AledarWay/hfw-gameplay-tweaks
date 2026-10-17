@@ -431,6 +431,9 @@ namespace HRZ2::DebugUI
 			if (ImGui::MenuItem("Dump AI World State of Nearby Agents (3 s)"))
 				Htn::RequestWorldStateDump();
 
+			if (ImGui::MenuItem("Trace AI Decisions of Nearby Agents (8 s)"))
+				Htn::RequestDecisionTrace();
+
 			const auto patches = Htn::GetPatches();
 
 			for (size_t i = 0; i < patches.size(); i++)

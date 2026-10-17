@@ -38,4 +38,7 @@ namespace Htn
 
 	// Logs the world state of every agent of these domains that plans during the next few seconds
 	void RequestWorldStateDump(uint32_t Milliseconds = 3000);
+
+	// Records which code cells (methods, subtasks, primitives) each agent runs during the next few seconds
+	void RequestDecisionTrace(uint32_t Milliseconds = 8000);
 }

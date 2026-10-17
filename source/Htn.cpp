@@ -30,11 +30,13 @@ namespace Htn
 			uint32_t m_SymbolCells;
 			uintptr_t m_Predicates;	   // char *[] world state predicate names, indexed by predicate number
 			uint32_t m_PredicateCount;
+			uintptr_t m_CodeDeltas; // uint8 delta (in qwords) to the next code pointer cell
+			uint32_t m_CodeCells;
 		};
 
 		constexpr std::array<DomainInfo, 2> Domains { {
-			{ "sunwing", 0xE9AC4FB, 0xE9AC88B, 0x1003D030, 0x449, 0x1003F280, 0x100411C0, 0xF9C, 0x10048300, 0x135 },
-			{ "waterwing", 0xB817D9C, 0xB81810C, 0xFF5C450, 0x49B, 0xFF5E930, 0xFF60B20, 0x10F7, 0xFF68600, 0x147 },
+			{ "sunwing", 0xE9AC4FB, 0xE9AC88B, 0x1003D030, 0x449, 0x1003F280, 0x100411C0, 0xF9C, 0x10048300, 0x135, 0x1004F870, 0xE46 },
+			{ "waterwing", 0xB817D9C, 0xB81810C, 0xFF5C450, 0x49B, 0xFF5E930, 0xFF60B20, 0x10F7, 0xFF68600, 0x147, 0xFF706E0, 0xFAF },
 		} };
 
 		constexpr uint8_t DispatchPrologue[] = { 0x56, 0x48, 0x81, 0xEC, 0xF0, 0x00, 0x00, 0x00 };
@@ -63,6 +65,29 @@ namespace Htn
 		std::vector<Patch> g_Patches;
 
 		std::atomic_uint64_t g_DumpUntil = 0;
+
+		// Decision trace: every code pointer cell in a pool is redirected through a stub that records which
+		// cells (subtasks, methods, primitives) each agent runs, in order of first use
+		struct TraceAgent
+		{
+			std::vector<uint32_t> m_Order;
+			std::unordered_set<uint32_t> m_Seen;
+		};
+
+		struct TraceDomain
+		{
+			uint8_t *m_Stubs = nullptr;
+			std::vector<uint32_t> m_Offsets;   // Pool offset per traced cell
+			std::vector<uint64_t> m_Originals; // Original code pointer per traced cell
+			bool m_Active = false;
+		};
+
+		constexpr size_t StubSize = 64;
+		std::array<TraceDomain, 2> g_Trace;
+		std::atomic_bool g_Tracing = false;
+		std::atomic_uint64_t g_TraceUntil = 0;
+		std::mutex g_TraceMutex;
+		std::array<std::unordered_map<uintptr_t, TraceAgent>, 2> g_TraceAgents;
 		std::unordered_set<uintptr_t> g_Dumped; // Guarded by g_Mutex
 
 		bool SafeCopy(void *Destination, const void *Source, size_t Size)
@@ -277,6 +302,167 @@ namespace Htn
 			spdlog::info("{}", text);
 		}
 
+		void TraceHit(uint32_t Id, uintptr_t WorldState)
+		{
+			const size_t domain = Id >> 24;
+			const uint32_t cell = Id & 0xFFFFFF;
+
+			if (domain >= g_TraceAgents.size())
+				return;
+
+			std::scoped_lock lock(g_TraceMutex);
+			auto& agent = g_TraceAgents[domain][WorldState];
+
+			if (agent.m_Seen.insert(cell).second)
+				agent.m_Order.emplace_back(cell);
+		}
+
+		void EmitStub(uint8_t *Out, uint32_t Id, uint64_t Original)
+		{
+			const uint64_t logger = reinterpret_cast<uint64_t>(&TraceHit);
+			uint8_t code[] = {
+				0x51,							  // push rcx
+				0x52,							  // push rdx
+				0x41, 0x50,						  // push r8
+				0x41, 0x51,						  // push r9
+				0x48, 0x83, 0xEC, 0x28,			  // sub rsp, 0x28
+				0xB9, 0, 0, 0, 0,				  // mov ecx, Id (rdx = world state)
+				0x48, 0xB8, 0, 0, 0, 0, 0, 0, 0, 0, // mov rax, TraceHit
+				0xFF, 0xD0,						  // call rax
+				0x48, 0x83, 0xC4, 0x28,			  // add rsp, 0x28
+				0x41, 0x59,						  // pop r9
+				0x41, 0x58,						  // pop r8
+				0x5A,							  // pop rdx
+				0x59,							  // pop rcx
+				0x48, 0xB8, 0, 0, 0, 0, 0, 0, 0, 0, // mov rax, Original
+				0xFF, 0xE0,						  // jmp rax
+			};
+
+			memcpy(&code[11], &Id, 4);
+			memcpy(&code[17], &logger, 8);
+			memcpy(&code[39], &Original, 8);
+			memset(Out, 0xCC, StubSize);
+			memcpy(Out, code, sizeof(code));
+		}
+
+		bool InsideModule(uint64_t Address)
+		{
+			const auto nt = reinterpret_cast<const IMAGE_NT_HEADERS *>(g_Base + reinterpret_cast<const IMAGE_DOS_HEADER *>(g_Base)->e_lfanew);
+			return Address >= g_Base && Address < g_Base + nt->OptionalHeader.SizeOfImage;
+		}
+
+		void StartTraceDomain(size_t Domain)
+		{
+			const auto& info = Domains[Domain];
+			auto& trace = g_Trace[Domain];
+			const auto pool = g_States[Domain].m_Pool.load();
+
+			if (!pool || trace.m_Active)
+				return;
+
+			if (trace.m_Offsets.empty())
+			{
+				const auto deltas = At<uint8_t>(info.m_CodeDeltas);
+				size_t offset = 0;
+
+				for (uint32_t i = 0; i < info.m_CodeCells; i++)
+				{
+					offset += deltas[i] * 8;
+					trace.m_Offsets.emplace_back(static_cast<uint32_t>(offset));
+				}
+
+				trace.m_Stubs = static_cast<uint8_t *>(VirtualAlloc(nullptr, trace.m_Offsets.size() * StubSize, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+
+				if (!trace.m_Stubs)
+				{
+					spdlog::error("[htn] trace: no memory for stubs");
+					trace.m_Offsets.clear();
+					return;
+				}
+			}
+
+			trace.m_Originals.assign(trace.m_Offsets.size(), 0);
+			size_t redirected = 0;
+
+			for (size_t i = 0; i < trace.m_Offsets.size(); i++)
+			{
+				auto cell = reinterpret_cast<uint64_t *>(pool + trace.m_Offsets[i]);
+				uint64_t original = 0;
+
+				if (!SafeCopy(&original, cell, sizeof(original)) || !InsideModule(original))
+					continue;
+
+				trace.m_Originals[i] = original;
+				const auto stub = trace.m_Stubs + i * StubSize;
+				EmitStub(stub, static_cast<uint32_t>((Domain << 24) | i), original);
+
+				const uint64_t value = reinterpret_cast<uint64_t>(stub);
+				SafeCopy(cell, &value, sizeof(value));
+				redirected++;
+			}
+
+			FlushInstructionCache(GetCurrentProcess(), trace.m_Stubs, trace.m_Offsets.size() * StubSize);
+			trace.m_Active = true;
+			spdlog::info("[htn] trace: {} code cells of the {} domain redirected", redirected, info.m_Name);
+		}
+
+		void StopTraceDomain(size_t Domain)
+		{
+			auto& trace = g_Trace[Domain];
+			const auto pool = g_States[Domain].m_Pool.load();
+
+			if (!trace.m_Active)
+				return;
+
+			// Stubs stay allocated: frames copied during the trace may still call them
+			for (size_t i = 0; i < trace.m_Offsets.size(); i++)
+			{
+				if (trace.m_Originals[i] && pool)
+					SafeCopy(reinterpret_cast<void *>(pool + trace.m_Offsets[i]), &trace.m_Originals[i], sizeof(uint64_t));
+			}
+
+			trace.m_Active = false;
+
+			std::scoped_lock lock(g_TraceMutex);
+
+			for (auto& [ws, agent] : g_TraceAgents[Domain])
+			{
+				std::string text = std::format("[htn] trace {} agent {:#x}: {} cells, pool offsets in order of first use:", Domains[Domain].m_Name, ws, agent.m_Order.size());
+
+				for (size_t i = 0; i < agent.m_Order.size(); i++)
+					text += std::format("{}{:x}", i % 24 == 0 ? "\n  " : " ", trace.m_Offsets[agent.m_Order[i]]);
+
+				spdlog::info("{}", text);
+			}
+
+			g_TraceAgents[Domain].clear();
+		}
+
+		void UpdateTrace()
+		{
+			if (!g_Tracing.load(std::memory_order_relaxed))
+				return;
+
+			std::scoped_lock lock(g_Mutex);
+
+			if (!g_Tracing.load())
+				return;
+
+			if (GetTickCount64() < g_TraceUntil.load())
+			{
+				for (size_t d = 0; d < Domains.size(); d++)
+					StartTraceDomain(d);
+
+				return;
+			}
+
+			for (size_t d = 0; d < Domains.size(); d++)
+				StopTraceDomain(d);
+
+			g_Tracing = false;
+			spdlog::info("[htn] trace finished");
+		}
+
 		template<size_t D>
 		uint64_t HookDispatch(void *Pool, void *A, void *B, void *C, uint64_t E, uint64_t F)
 		{
@@ -347,6 +533,8 @@ namespace Htn
 
 			if (dump)
 				DumpWorldState(D, ws);
+
+			UpdateTrace();
 
 			const auto result = g_States[D].m_Behave(Planner, WorldState, Frame, R9);
 
@@ -478,6 +666,19 @@ namespace Htn
 			if (p.m_Domain == Domains[d].m_Name && g_States[d].m_Pool)
 				ApplyPatchLocked(p, d, g_States[d].m_Pool);
 		}
+	}
+
+	void RequestDecisionTrace(uint32_t Milliseconds)
+	{
+		{
+			std::scoped_lock lock(g_TraceMutex);
+
+			for (auto& agents : g_TraceAgents)
+				agents.clear();
+		}
+
+		g_TraceUntil = GetTickCount64() + Milliseconds;
+		g_Tracing = true;
 	}
 
 	void RequestWorldStateDump(uint32_t Milliseconds)
