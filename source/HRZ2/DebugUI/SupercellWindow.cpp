@@ -79,10 +79,42 @@ namespace HRZ2::DebugUI
 			Supercells::RequestNextStorm();
 
 		ImGui::SameLine();
+
+		if (ImGui::Button("Remove storm"))
+			Supercells::RemoveCurrentStorm();
+
+		ImGui::SameLine();
 		bool hold = Supercells::GetHoldStorm();
 
 		if (ImGui::Checkbox("Hold current storm (freeze timer)", &hold))
 			Supercells::SetHoldStorm(hold);
+
+		if (Supercells::GetStormsPaused())
+		{
+			ImGui::TextColored(Warning, "New storms are paused.");
+			ImGui::SameLine();
+
+			if (ImGui::SmallButton("Resume storms"))
+				Supercells::SetStormsPaused(false);
+		}
+
+		const auto lightning = Supercells::GetLightningStatus();
+		ImGui::BeginDisabled(!lightning.m_Known);
+
+		if (ImGui::Button("Lightning strike"))
+			Supercells::TriggerLightning();
+
+		ImGui::EndDisabled();
+		ImGui::SameLine();
+
+		if (!lightning.m_Known)
+			ImGui::TextDisabled("lightning script not seen yet (needs an active storm nearby)");
+		else if (lightning.m_Step != 0)
+			ImGui::TextDisabled("strike in progress (step %d), a new one starts after it", lightning.m_Step);
+		else if (!lightning.m_Enabled)
+			ImGui::TextDisabled("lightning is off in this storm phase, the strike starts when it turns on");
+		else
+			ImGui::TextDisabled("ready");
 
 		double player[3] = {};
 		const bool havePlayer = Supercells::GetPlayerPosition(player);

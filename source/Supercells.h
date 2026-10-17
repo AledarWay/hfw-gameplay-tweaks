@@ -66,7 +66,19 @@ namespace Supercells
 	Status GetStatus();
 	const char *StateName(int State);
 
+	struct LightningStatus
+	{
+		bool m_Known = false;	// The storm scripts have been seen using the lightning facts
+		bool m_Enabled = false; // Lightning sequences may run (storm is up)
+		int m_Step = 0;			// 0 = idle between strikes
+	};
+
 	void RequestNextStorm();
+	void RemoveCurrentStorm(); // Ends the storm and pauses new ones
+	void SetStormsPaused(bool Paused);
+	bool GetStormsPaused();
+	void TriggerLightning();
+	LightningStatus GetLightningStatus();
 	void SetHoldStorm(bool Hold);
 	bool GetHoldStorm();
 

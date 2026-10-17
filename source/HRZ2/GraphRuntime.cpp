@@ -286,6 +286,7 @@ namespace HRZ2::GraphRuntime
 				entry.m_Kind = Kind;
 			}
 
+			entry.m_Object = Fact;
 			entry.m_LastWasWrite = Write;
 			entry.m_Overridden = Overridden;
 			entry.m_Number = Number;
@@ -1036,6 +1037,14 @@ namespace HRZ2::GraphRuntime
 			return nullptr;
 
 		return g_GetEnum(Context, Fact);
+	}
+
+	std::optional<int> ReadInt(void *Context, void *Fact)
+	{
+		if (!IsInstalled() || !Fact || !g_GetInt)
+			return std::nullopt;
+
+		return g_GetInt(Context, Fact);
 	}
 
 	std::optional<float> ReadFloat(void *Context, void *Fact)

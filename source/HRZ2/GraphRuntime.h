@@ -58,6 +58,7 @@ namespace HRZ2::GraphRuntime
 		uint64_t m_Count = 0;
 		uint64_t m_LastTick = 0;
 		uint64_t m_ChangedTick = 0;
+		void *m_Object = nullptr; // Fact object, valid while its asset stays loaded
 	};
 
 	struct WatchedGraph
@@ -102,6 +103,7 @@ namespace HRZ2::GraphRuntime
 	// Direct fact access without overrides, for mod code on the game thread. Context is the graph's 16-byte fact context.
 	std::optional<bool> ReadBool(void *Context, void *Fact);
 	void *ReadEnum(void *Context, void *Fact);
+	std::optional<int> ReadInt(void *Context, void *Fact);
 	std::optional<float> ReadFloat(void *Context, void *Fact);
 	bool ReadPosition(void *Context, void *Fact, double Out[3]);
 	bool WriteBool(void *Context, void *Fact, bool Value);

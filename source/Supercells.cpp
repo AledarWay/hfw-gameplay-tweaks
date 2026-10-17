@@ -30,9 +30,15 @@ namespace Supercells
 			"EntryPoint_SuperCellScriptContainer_eaae50a7816c4b1590d67387535ffbc9_5_HandleEvent_MsgSceneUpdate";
 
 		constexpr auto PositionFact = GGUUID::Parse("9F73BE2D-14F3-A840-BD6A-172FF8623CEA");
+		constexpr auto LightningStepFact = GGUUID::Parse("4E06708B-711A-BD43-BF8B-EC33FF8AE870");
+		constexpr auto LightningEnabledFact = GGUUID::Parse("5C170C27-4541-8241-861E-41C714C4EAD8");
 		constexpr auto QuestInProgress = GGUUID::Parse("AE6A579F-D1DD-8441-856F-5599DB49825D");
 
-		// Container state machine (MsgSceneUpdate, r8): state index at +0x28, per-state timers before it
+		// Container state machine (MsgSceneUpdate, r8): state index at +0x28, per-state timers before it.
+		// Cycle: 1 choose -> 6 forming -> 2 rise -> 7 active -> 4 end -> 5 dissipate -> 1; rejected picks wait in 3.
+		constexpr int StateChoose = 1;
+		constexpr int StateRetryWait = 3;
+		constexpr int StateDissipate = 5;
 		constexpr int StateForming = 6;
 		constexpr int StateActive = 7;
 		constexpr size_t StateOffset = 0x28;
@@ -105,6 +111,13 @@ namespace Supercells
 
 		std::atomic_bool g_SkipRequested = false;
 		std::atomic_bool g_Hold = false;
+		std::atomic_bool g_RemoveRequested = false;
+		std::atomic_bool g_Paused = false;
+		std::atomic_bool g_LightningRequested = false;
+		std::atomic_uint64_t g_LightningRequestTick = 0;
+		std::atomic_bool g_LightningKnown = false;
+		std::atomic_bool g_LightningEnabled = false;
+		std::atomic_int g_LightningStep = 0;
 		float g_HeldTime = -1.0f;
 
 		std::mutex g_PositionMutex;
@@ -614,6 +627,41 @@ namespace Supercells
 			ApplyPositionOverride(position, g_KeepAltitude);
 		}
 
+		// Lightning runs in the storm animation script: while enabled, a step of 0 waits and 1 starts a strike sequence
+		void UpdateLightning(uint8_t *Base)
+		{
+			const auto step = GetObservedFact(LightningStepFact);
+			const auto enabled = GetObservedFact(LightningEnabledFact);
+			const auto now = GetTickCount64();
+
+			// Only touch fact objects the scripts used moments ago
+			if (!step || !enabled || !step->m_Object || !enabled->m_Object || now - step->m_LastTick > 3000 || now - enabled->m_LastTick > 3000)
+			{
+				g_LightningKnown = false;
+				g_LightningRequested = false;
+				return;
+			}
+
+			FactContext ctx(Base);
+			const auto isEnabled = ReadBool(ctx.Get(), enabled->m_Object).value_or(false);
+			const auto current = ReadInt(ctx.Get(), step->m_Object).value_or(-1);
+
+			g_LightningKnown = true;
+			g_LightningEnabled = isEnabled;
+			g_LightningStep = current;
+
+			// A request waits up to 10 s for the running strike to finish
+			if (g_LightningRequested && now - g_LightningRequestTick > 10000)
+				g_LightningRequested = false;
+
+			if (g_LightningRequested && current == 0)
+			{
+				g_LightningRequested = false;
+				WriteInt(ctx.Get(), step->m_Object, 1);
+				spdlog::info("[supercells] lightning strike triggered");
+			}
+		}
+
 		uint64_t HookSceneUpdate(void *A, void *B, void *State, void *InstancePtr, void *E, void *F)
 		{
 			const auto base = static_cast<uint8_t *>(State);
@@ -621,6 +669,18 @@ namespace Supercells
 			const int before = *reinterpret_cast<int *>(base + StateOffset);
 
 			g_Instance = instance;
+
+			if (g_RemoveRequested)
+			{
+				// Run out the forming timer first, the storm then ends from the active state below
+				if (before == StateForming)
+					*reinterpret_cast<float *>(base + FormingTimer) = *reinterpret_cast<float *>(base + FormingTimer + 4) + 1.0f;
+				else if (before == StateActive)
+					g_SkipRequested = true;
+
+				if (before != StateForming)
+					g_RemoveRequested = false;
+			}
 
 			if (before == StateActive)
 			{
@@ -652,7 +712,9 @@ namespace Supercells
 
 			RefreshPlayerOverride();
 
-			const auto result = g_OriginalSceneUpdate(A, B, State, InstancePtr, E, F);
+			// Paused: hold the container before it picks the next location
+			const bool paused = g_Paused && (before == StateDissipate || before == StateRetryWait || before == StateChoose);
+			const auto result = paused ? uint64_t { 0 } : g_OriginalSceneUpdate(A, B, State, InstancePtr, E, F);
 			const int after = *reinterpret_cast<int *>(base + StateOffset);
 
 			if (after == StateForming && before != StateForming)
@@ -673,6 +735,7 @@ namespace Supercells
 				UpdateQuestBlockOverrides(instance, ignoreBlocks);
 
 			UpdateSnapshot(instance);
+			UpdateLightning(instance);
 
 			const size_t timer = after == StateActive ? ActiveTimer : after == StateForming ? FormingTimer : 0;
 
@@ -810,10 +873,16 @@ namespace Supercells
 			return "not running";
 		case 0:
 			return "starting";
-		case 3:
-			return "waiting";
-		case 5:
+		case StateChoose:
 			return "choosing location";
+		case 2:
+			return "rising";
+		case StateRetryWait:
+			return "waiting to retry a location";
+		case 4:
+			return "ending";
+		case StateDissipate:
+			return "dissipating";
 		case StateForming:
 			return "forming";
 		case StateActive:
@@ -827,7 +896,44 @@ namespace Supercells
 
 	void RequestNextStorm()
 	{
+		g_Paused = false;
+		g_RemoveRequested = false;
 		g_SkipRequested = true;
+	}
+
+	void RemoveCurrentStorm()
+	{
+		g_Hold = false;
+		g_Paused = true;
+		g_RemoveRequested = true;
+	}
+
+	void SetStormsPaused(bool Paused)
+	{
+		g_Paused = Paused;
+
+		if (!Paused)
+			g_RemoveRequested = false;
+	}
+
+	bool GetStormsPaused()
+	{
+		return g_Paused;
+	}
+
+	void TriggerLightning()
+	{
+		g_LightningRequestTick = GetTickCount64();
+		g_LightningRequested = true;
+	}
+
+	LightningStatus GetLightningStatus()
+	{
+		LightningStatus s;
+		s.m_Known = g_LightningKnown;
+		s.m_Enabled = g_LightningEnabled;
+		s.m_Step = g_LightningStep;
+		return s;
 	}
 
 	void SetHoldStorm(bool Hold)
