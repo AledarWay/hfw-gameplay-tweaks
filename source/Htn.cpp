@@ -10,6 +10,7 @@
 #include <mutex>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include "ModConfiguration.h"
 #include "Htn.h"
 
@@ -62,6 +63,40 @@ namespace Htn
 		void FailCell(void *, void *, void *)
 		{
 		}
+
+		// Cells that depend on the agent: "mark-mount" remembers which world state reached the player's mount
+		// branch, "fail-if-mount" fails only for that agent. Code cells get (planner, world state, frame).
+		using CellFn = uint64_t (*)(void *, void *, void *, void *);
+
+		constexpr size_t MaxConditionalCells = 16;
+		std::array<std::atomic_uint64_t, MaxConditionalCells> g_CellOriginals;
+		size_t g_UsedConditionalCells = 0;
+		thread_local void *g_MountWorldState = nullptr;
+
+		template<size_t N>
+		uint64_t MarkMountCell(void *Planner, void *WorldState, void *Frame, void *R9)
+		{
+			g_MountWorldState = WorldState;
+			return reinterpret_cast<CellFn>(g_CellOriginals[N].load())(Planner, WorldState, Frame, R9);
+		}
+
+		template<size_t N>
+		uint64_t FailIfMountCell(void *Planner, void *WorldState, void *Frame, void *R9)
+		{
+			if (WorldState == g_MountWorldState)
+				return 0;
+
+			return reinterpret_cast<CellFn>(g_CellOriginals[N].load())(Planner, WorldState, Frame, R9);
+		}
+
+		template<size_t... I>
+		constexpr auto MakeCellTable(bool Mark, std::index_sequence<I...>)
+		{
+			return std::array<CellFn, sizeof...(I)> { (Mark ? &MarkMountCell<I> : &FailIfMountCell<I>)... };
+		}
+
+		const auto MarkMountCells = MakeCellTable(true, std::make_index_sequence<MaxConditionalCells>());
+		const auto FailIfMountCells = MakeCellTable(false, std::make_index_sequence<MaxConditionalCells>());
 
 		uintptr_t g_Base = 0;
 		std::atomic_bool g_Installed = false;
@@ -192,7 +227,36 @@ namespace Htn
 
 			if (P.m_Enabled && !P.m_Applied)
 			{
-				const auto value = ParseValueLocked(Domain, P.m_Value);
+				const bool conditional = P.m_Value == "mark-mount" || P.m_Value == "fail-if-mount";
+				std::optional<uint64_t> value;
+
+				if (!SafeCopy(&P.m_Original, address, sizeof(uint64_t)))
+				{
+					P.m_Error = "pool not readable";
+					return;
+				}
+
+				if (conditional)
+				{
+					if (P.m_Slot < 0)
+					{
+						if (g_UsedConditionalCells >= MaxConditionalCells)
+						{
+							P.m_Error = "too many conditional cells";
+							return;
+						}
+
+						P.m_Slot = static_cast<int>(g_UsedConditionalCells++);
+					}
+
+					g_CellOriginals[P.m_Slot] = P.m_Original;
+					const auto& table = P.m_Value == "mark-mount" ? MarkMountCells : FailIfMountCells;
+					value = reinterpret_cast<uint64_t>(table[P.m_Slot]);
+				}
+				else
+				{
+					value = ParseValueLocked(Domain, P.m_Value);
+				}
 
 				if (!value)
 				{
@@ -200,7 +264,7 @@ namespace Htn
 					return;
 				}
 
-				if (!SafeCopy(&P.m_Original, address, sizeof(uint64_t)) || !SafeCopy(address, &*value, sizeof(uint64_t)))
+				if (!SafeCopy(address, &*value, sizeof(uint64_t)))
 				{
 					P.m_Error = "pool not writable";
 					return;
@@ -633,6 +697,19 @@ namespace Htn
 				{ 0x194F0, false, "Sunwing: landed, skip the whole mount branch (calling while landed may break)" },
 			};
 
+			// circle_combat may land next to the threat; against flying targets the mount lands and takes off again
+			struct ConditionalPreset
+			{
+				uint32_t m_Offset;
+				const char *m_Value;
+				const char *m_Label;
+			};
+
+			constexpr ConditionalPreset conditional[] = {
+				{ 0xBFD0, "mark-mount", "Sunwing: detect the called mount (needed by the item below)" },
+				{ 0x49E48, "fail-if-mount", "Sunwing mount: don't land next to the target" },
+			};
+
 			for (const auto& preset : presets)
 			{
 				Patch p;
@@ -640,6 +717,16 @@ namespace Htn
 				p.m_Domain = "sunwing";
 				p.m_Offset = preset.m_Offset;
 				p.m_Value = "fail";
+				p.m_Label = preset.m_Label;
+				g_Patches.emplace_back(std::move(p));
+			}
+
+			for (const auto& preset : conditional)
+			{
+				Patch p;
+				p.m_Domain = "sunwing";
+				p.m_Offset = preset.m_Offset;
+				p.m_Value = preset.m_Value;
 				p.m_Label = preset.m_Label;
 				g_Patches.emplace_back(std::move(p));
 			}
