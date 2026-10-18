@@ -713,6 +713,9 @@ static bool IsApexTuningType(const std::string& Type)
 		"InitialFactsComponentResource",
 		"ShaderOverridesComponentResource",
 		"DestructibilityPartDamageRemapComponentResource",
+		"StaggerStateComponentResource",
+		"KnockDownStateComponentResource",
+		"HitReactionAdditionalSeriesComponentResource",
 	};
 
 	return types.contains(Type);
@@ -740,18 +743,22 @@ void ModCoreEvents::TrackApexSetups(const HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRefObj
 	{
 		if (auto array = components(Setup))
 		{
-			for (size_t i = 0; i < array->size(); i++)
+			for (auto injected : Recipient.m_InjectedAll)
 			{
-				if ((*array)[i].GetPtr() == Recipient.m_Injected)
+				for (size_t i = 0; i < array->size(); i++)
 				{
-					(*array)[i] = (*array)[array->size() - 1];
-					array->pop_back();
-					break;
+					if ((*array)[i].GetPtr() == injected)
+					{
+						(*array)[i] = (*array)[array->size() - 1];
+						array->pop_back();
+						break;
+					}
 				}
 			}
 		}
 
 		Recipient.m_Injected = nullptr;
+		Recipient.m_InjectedAll.clear();
 	};
 
 	if (!Loaded)
@@ -791,14 +798,15 @@ void ModCoreEvents::TrackApexSetups(const HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRefObj
 				continue;
 			}
 
-			if (recipient.m_Injected && lostHackables.contains(recipient.m_Injected))
+			if (recipient.m_Injected)
 			{
-				// Still referenced elsewhere? Only keep it if another donor of this entity uses the same resource.
+				// Only keep it while another donor of this entity still uses the same resource
 				auto donors = m_ApexDonors.find(recipient.m_Entity);
 				const bool stillDonated = donors != m_ApexDonors.end() &&
 					std::ranges::any_of(donors->second, [&](const ApexDonor& d) { return d.m_Hackable == recipient.m_Injected; });
+				const bool partUnloading = std::ranges::any_of(recipient.m_InjectedAll, [&](auto p) { return unloading.contains(p); });
 
-				if (!stillDonated || unloading.contains(recipient.m_Injected))
+				if (partUnloading || (lostHackables.contains(recipient.m_Injected) && !stillDonated))
 				{
 					removeInjected(setup, recipient);
 					spdlog::info("[apex] removed override from {} (donor unloading)", recipient.m_UUID);
@@ -871,7 +879,7 @@ void ModCoreEvents::TrackApexSetups(const HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRefObj
 			if (hackable)
 				m_ApexDonors[entity].emplace_back(ApexDonor { object.GetPtr(), hackable, std::move(list) });
 			else if (apex || ModConfiguration.ApexOverrideAllVariants)
-				m_ApexRecipients[object.GetPtr()] = ApexRecipient { entity, nullptr, object->m_UUID, std::move(list) };
+				m_ApexRecipients[object.GetPtr()] = ApexRecipient { entity, nullptr, {}, object->m_UUID, std::move(list) };
 		}
 	}
 
@@ -922,8 +930,33 @@ void ModCoreEvents::TrackApexSetups(const HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRefObj
 			{
 				const auto& type = InjectTypeName(object);
 
-				if (!IsApexTuningType(type) && type != "NodeGraphComponentResource")
-					mismatch += std::format(" -{}", type);
+				if (IsApexTuningType(type) || type == "NodeGraphComponentResource")
+					continue;
+
+				// Sets holding only tuning components, node graphs or the hackable component itself
+				if (type == "EntityComponentSetResource")
+				{
+					bool allowed = true;
+
+					if (auto set = components(object))
+					{
+						for (size_t j = 0; j < set->size() && allowed; j++)
+						{
+							auto child = (*set)[j].GetPtr();
+
+							if (!child)
+								continue;
+
+							const auto& childType = InjectTypeName(child);
+							allowed = IsApexTuningType(childType) || childType == "NodeGraphComponentResource" || child == donor.m_Hackable;
+						}
+					}
+
+					if (allowed)
+						continue;
+				}
+
+				mismatch += std::format(" -{}", type);
 			}
 
 			if (!mismatch.empty())
@@ -954,12 +987,27 @@ void ModCoreEvents::TrackApexSetups(const HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRefObj
 			continue;
 		}
 
+		// The hackable component comes with a node graph in the regular version (missing from the Apex one), which
+		// among other things registers the machine as the callable mount
 		auto hackable = best->m_Hackable;
-		array->push_back(HRZ2::Ref<HRZ2::RTTIRefObject>(hackable));
+		std::vector<HRZ2::RTTIRefObject *> onlyDonor;
+		std::ranges::set_difference(best->m_Components, recipient.m_Components, std::back_inserter(onlyDonor));
+
+		recipient.m_InjectedAll = { hackable };
+
+		for (auto object : onlyDonor)
+		{
+			if (InjectTypeName(object) == "NodeGraphComponentResource")
+				recipient.m_InjectedAll.push_back(object);
+		}
+
+		for (auto object : recipient.m_InjectedAll)
+			array->push_back(HRZ2::Ref<HRZ2::RTTIRefObject>(object));
+
 		recipient.m_Injected = hackable;
 
-		spdlog::info("[apex] {} can now be overridden (component {} from {}, {}/{} components shared)", recipient.m_UUID, hackable->m_UUID,
-			best->m_Setup->m_UUID, bestShared, total);
+		spdlog::info("[apex] {} can now be overridden (component {} + {} node graphs from {}, {}/{} components shared)", recipient.m_UUID,
+			hackable->m_UUID, recipient.m_InjectedAll.size() - 1, best->m_Setup->m_UUID, bestShared, total);
 	}
 }
 

@@ -90,7 +90,8 @@ private:
 	struct ApexRecipient
 	{
 		HRZ2::RTTIRefObject *m_Entity = nullptr;
-		HRZ2::RTTIRefObject *m_Injected = nullptr;
+		HRZ2::RTTIRefObject *m_Injected = nullptr; // Hackable component
+		std::vector<HRZ2::RTTIRefObject *> m_InjectedAll; // Hackable component and its node graphs
 		HRZ2::GGUUID m_UUID;
 		std::vector<HRZ2::RTTIRefObject *> m_Components; // Sorted, without the Apex set
 		bool m_Reported = false;
