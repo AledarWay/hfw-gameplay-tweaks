@@ -2,6 +2,7 @@
 #include <detours/detours.h>
 #include <intrin.h>
 #include <algorithm>
+#include <tuple>
 #include <array>
 #include <atomic>
 #include <cctype>
@@ -284,7 +285,12 @@ namespace HRZ2::GraphRuntime
 			}
 		}
 
-		void Observe(const CodeRange& Range, void *Fact, FactKind Kind, bool Write, bool Overridden, std::string Value, float Number = 0, const double *Position = nullptr)
+		uint64_t ContextId(void *Context);
+
+		// Traced graphs log a value whenever it differs from the last one logged for the same fact and context
+		std::map<std::tuple<size_t, std::array<uint8_t, sizeof(GGUUID)>, uint64_t>, std::string> g_TraceLogged;
+
+		void Observe(const CodeRange& Range, void *Context, void *Fact, FactKind Kind, bool Write, bool Overridden, std::string Value, float Number = 0, const double *Position = nullptr)
 		{
 			GGUUID uuid {};
 
@@ -316,19 +322,29 @@ namespace HRZ2::GraphRuntime
 			const bool trace = g_TagTrace[Range.m_Tag].load(std::memory_order_relaxed);
 			const bool throttled = Kind == FactKind::Float || Kind == FactKind::Position;
 
-			if (trace && Value != entry.m_LoggedValue && (!throttled || tick - entry.m_LoggedTick > 2000))
+			if (trace && (!throttled || tick - entry.m_LoggedTick > 2000))
 			{
-				spdlog::info(
-					"[graph] {} {} {} {} {}{}",
-					entry.m_Graph,
-					Write ? "Set" : "Get",
-					KindName(Kind),
-					GetFactLabel(uuid),
-					Value,
-					Overridden ? " (overridden)" : "");
+				const auto context = ContextId(Context);
+				std::array<uint8_t, sizeof(GGUUID)> key {};
+				memcpy(key.data(), &uuid, key.size());
+				auto& logged = g_TraceLogged[std::make_tuple(Range.m_Tag, key, context)];
 
-				entry.m_LoggedValue = Value;
-				entry.m_LoggedTick = tick;
+				if (logged != Value)
+				{
+					spdlog::info(
+						"[graph] {} {} {} {} {}{} ctx={:#x}",
+						entry.m_Graph,
+						Write ? "Set" : "Get",
+						KindName(Kind),
+						GetFactLabel(uuid),
+						Value,
+						Overridden ? " (overridden)" : "",
+						context);
+
+					logged = Value;
+					entry.m_LoggedValue = Value;
+					entry.m_LoggedTick = tick;
+				}
 			}
 
 			if (entry.m_ChangedTick == 0 || entry.m_Value != Value)
@@ -666,7 +682,7 @@ namespace HRZ2::GraphRuntime
 					result = o->m_Bool;
 				}
 
-				Observe(*range, Fact, FactKind::Bool, false, o.has_value(), result ? "true" : "false", result ? 1.0f : 0.0f);
+				Observe(*range, Context, Fact, FactKind::Bool, false, o.has_value(), result ? "true" : "false", result ? 1.0f : 0.0f);
 				return result;
 			}
 
@@ -688,7 +704,7 @@ namespace HRZ2::GraphRuntime
 					LogWriteBack(Context, Fact, EnumEntryName(value));
 				}
 
-				Observe(*range, Fact, FactKind::Enum, false, value != result, EnumEntryName(value));
+				Observe(*range, Context, Fact, FactKind::Enum, false, value != result, EnumEntryName(value));
 				return value;
 			}
 
@@ -714,7 +730,7 @@ namespace HRZ2::GraphRuntime
 					result = o->m_Int;
 				}
 
-				Observe(*range, Fact, FactKind::Int, false, o.has_value(), std::to_string(result), static_cast<float>(result));
+				Observe(*range, Context, Fact, FactKind::Int, false, o.has_value(), std::to_string(result), static_cast<float>(result));
 				return result;
 			}
 
@@ -740,7 +756,7 @@ namespace HRZ2::GraphRuntime
 					result = o->m_Float;
 				}
 
-				Observe(*range, Fact, FactKind::Float, false, o.has_value(), std::format("{:.3f}", result), result);
+				Observe(*range, Context, Fact, FactKind::Float, false, o.has_value(), std::format("{:.3f}", result), result);
 				return result;
 			}
 
@@ -759,6 +775,7 @@ namespace HRZ2::GraphRuntime
 
 				Observe(
 					*range,
+					Context,
 					Fact,
 					FactKind::Position,
 					false,
@@ -776,7 +793,7 @@ namespace HRZ2::GraphRuntime
 		uint64_t HookSetBool(void *Context, void *Fact, bool Value)
 		{
 			if (auto range = FindRange(_ReturnAddress()))
-				Observe(*range, Fact, FactKind::Bool, true, false, Value ? "true" : "false", Value ? 1.0f : 0.0f);
+				Observe(*range, Context, Fact, FactKind::Bool, true, false, Value ? "true" : "false", Value ? 1.0f : 0.0f);
 			else
 				WatchSet(_ReturnAddress(), Context, Fact, FactKind::Bool, FormatBool(Value), Value ? 1.0f : 0.0f);
 
@@ -786,7 +803,7 @@ namespace HRZ2::GraphRuntime
 		uint64_t HookSetEnum(void *Context, void *Fact, void *Value)
 		{
 			if (auto range = FindRange(_ReturnAddress()))
-				Observe(*range, Fact, FactKind::Enum, true, false, EnumEntryName(Value));
+				Observe(*range, Context, Fact, FactKind::Enum, true, false, EnumEntryName(Value));
 			else
 				WatchSet(_ReturnAddress(), Context, Fact, FactKind::Enum, EnumEntryName(Value));
 
@@ -796,7 +813,7 @@ namespace HRZ2::GraphRuntime
 		uint64_t HookSetInt(void *Context, void *Fact, int Value)
 		{
 			if (auto range = FindRange(_ReturnAddress()))
-				Observe(*range, Fact, FactKind::Int, true, false, std::to_string(Value), static_cast<float>(Value));
+				Observe(*range, Context, Fact, FactKind::Int, true, false, std::to_string(Value), static_cast<float>(Value));
 			else
 				WatchSet(_ReturnAddress(), Context, Fact, FactKind::Int, std::to_string(Value), static_cast<float>(Value));
 
@@ -806,7 +823,7 @@ namespace HRZ2::GraphRuntime
 		uint64_t HookSetFloat(void *Context, void *Fact, float Value)
 		{
 			if (auto range = FindRange(_ReturnAddress()))
-				Observe(*range, Fact, FactKind::Float, true, false, std::format("{:.3f}", Value), Value);
+				Observe(*range, Context, Fact, FactKind::Float, true, false, std::format("{:.3f}", Value), Value);
 			else
 				WatchSet(_ReturnAddress(), Context, Fact, FactKind::Float, std::format("{:.3f}", Value), Value);
 
@@ -819,7 +836,7 @@ namespace HRZ2::GraphRuntime
 			const auto text = std::format("{:.0f}, {:.0f}, {:.0f}", p[0], p[1], p[2]);
 
 			if (auto range = FindRange(_ReturnAddress()))
-				Observe(*range, Fact, FactKind::Position, true, false, text, 0, p);
+				Observe(*range, Context, Fact, FactKind::Position, true, false, text, 0, p);
 			else
 				WatchSet(_ReturnAddress(), Context, Fact, FactKind::Position, text, 0, p);
 
