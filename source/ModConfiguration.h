@@ -108,6 +108,8 @@ namespace InternalModConfig
 		bool KeepSupercellsAfterAether;
 		bool AllowAggressiveFlyingMountOverride;
 		bool CalledFlyingMountFights;
+		bool AllowApexOverride;
+		bool ApexOverrideAllVariants;
 
 		// [FlyingMountAI]
 		struct

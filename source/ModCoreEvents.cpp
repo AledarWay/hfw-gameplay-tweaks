@@ -592,6 +592,9 @@ void ModCoreEvents::OnBeforeUnloadGroup(const HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRe
 	if (!m_RefFindUUIDs.empty())
 		FindReferences(Objects, false);
 
+	if (ModConfiguration.AllowApexOverride)
+		TrackApexSetups(Objects, false);
+
 	for (auto& object : Objects)
 	{
 		const auto rtti = object->GetRTTI();
@@ -678,6 +681,190 @@ void ModCoreEvents::OnLoadAssetGroup(const HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRefOb
 
 	if (!m_RefFindUUIDs.empty())
 		FindReferences(Objects, true);
+
+	if (ModConfiguration.AllowApexOverride)
+		TrackApexSetups(Objects, true);
+}
+
+const std::string& ModCoreEvents::InjectTypeName(const HRZ2::RTTIRefObject *Object)
+{
+	const HRZ2::RTTI *rtti = Object->GetRTTI();
+	auto name = m_InjectTypeNames.find(rtti);
+
+	if (name == m_InjectTypeNames.end())
+		name = m_InjectTypeNames.emplace(rtti, rtti->GetSymbolName()).first;
+
+	return name->second;
+}
+
+void ModCoreEvents::TrackApexSetups(const HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRefObject>>& Objects, bool Loaded)
+{
+	using ComponentArray = HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRefObject>>;
+
+	std::scoped_lock lock(m_ApexMutex, m_InjectMutex);
+
+	auto components = [](HRZ2::RTTIRefObject *Setup) -> ComponentArray *
+	{
+		try
+		{
+			return &Setup->GetMemberRefUnsafe<ComponentArray>("ComponentResources");
+		}
+		catch (const std::exception&)
+		{
+			return nullptr;
+		}
+	};
+
+	auto removeInjected = [&](HRZ2::RTTIRefObject *Setup, ApexRecipient& Recipient)
+	{
+		if (auto array = components(Setup))
+		{
+			for (size_t i = 0; i < array->size(); i++)
+			{
+				if ((*array)[i].GetPtr() == Recipient.m_Injected)
+				{
+					(*array)[i] = (*array)[array->size() - 1];
+					array->pop_back();
+					break;
+				}
+			}
+		}
+
+		Recipient.m_Injected = nullptr;
+	};
+
+	if (!Loaded)
+	{
+		std::unordered_set<HRZ2::RTTIRefObject *> unloading;
+
+		for (auto& object : Objects)
+		{
+			if (object.GetPtr())
+				unloading.insert(object.GetPtr());
+		}
+
+		// Donors whose spawn setup or hackable resource goes away
+		std::unordered_set<HRZ2::RTTIRefObject *> lostHackables;
+
+		for (auto& [entity, donors] : m_ApexDonors)
+		{
+			std::erase_if(donors, [&](const ApexDonor& d)
+			{
+				if (!unloading.contains(d.m_Setup) && !unloading.contains(d.m_Hackable))
+					return false;
+
+				lostHackables.insert(d.m_Hackable);
+				return true;
+			});
+		}
+
+		std::erase_if(m_ApexDonors, [](const auto& e) { return e.second.empty(); });
+
+		for (auto itr = m_ApexRecipients.begin(); itr != m_ApexRecipients.end();)
+		{
+			auto& [setup, recipient] = *itr;
+
+			if (unloading.contains(setup))
+			{
+				itr = m_ApexRecipients.erase(itr);
+				continue;
+			}
+
+			if (recipient.m_Injected && lostHackables.contains(recipient.m_Injected))
+			{
+				// Still referenced elsewhere? Only keep it if another donor of this entity uses the same resource.
+				auto donors = m_ApexDonors.find(recipient.m_Entity);
+				const bool stillDonated = donors != m_ApexDonors.end() &&
+					std::ranges::any_of(donors->second, [&](const ApexDonor& d) { return d.m_Hackable == recipient.m_Injected; });
+
+				if (!stillDonated || unloading.contains(recipient.m_Injected))
+				{
+					removeInjected(setup, recipient);
+					spdlog::info("[apex] removed override from {} (donor unloading)", recipient.m_UUID);
+				}
+			}
+
+			++itr;
+		}
+	}
+	else
+	{
+		for (auto& object : Objects)
+		{
+			if (!object.GetPtr() || InjectTypeName(object.GetPtr()) != "SpawnSetup")
+				continue;
+
+			HRZ2::RTTIRefObject *entity = nullptr;
+
+			try
+			{
+				entity = object->GetMemberRefUnsafe<HRZ2::Ref<HRZ2::RTTIRefObject>>("EntityResource").GetPtr();
+			}
+			catch (const std::exception&)
+			{
+			}
+
+			auto array = components(object.GetPtr());
+
+			if (!entity || !array)
+				continue;
+
+			HRZ2::RTTIRefObject *hackable = nullptr;
+			bool apex = false;
+
+			for (size_t i = 0; i < array->size(); i++)
+			{
+				auto component = (*array)[i].GetPtr();
+
+				if (!component)
+					continue;
+
+				const auto& type = InjectTypeName(component);
+
+				if (type == "HackableComponentResource")
+				{
+					hackable = component;
+				}
+				else if (type == "EntityComponentSetResource" && !apex)
+				{
+					// The Apex variant adds a set with a dealt damage multiplier
+					if (auto set = components(component))
+					{
+						for (size_t j = 0; j < set->size() && !apex; j++)
+							apex = (*set)[j].GetPtr() && InjectTypeName((*set)[j].GetPtr()) == "DamageDealtModifierComponentResource";
+					}
+				}
+			}
+
+			if (hackable)
+				m_ApexDonors[entity].emplace_back(ApexDonor { object.GetPtr(), hackable });
+			else if (apex || ModConfiguration.ApexOverrideAllVariants)
+				m_ApexRecipients[object.GetPtr()] = ApexRecipient { entity, nullptr, object->m_UUID };
+		}
+	}
+
+	// Hand out donors to recipients that don't have one
+	for (auto& [setup, recipient] : m_ApexRecipients)
+	{
+		if (recipient.m_Injected)
+			continue;
+
+		auto donors = m_ApexDonors.find(recipient.m_Entity);
+
+		if (donors == m_ApexDonors.end() || donors->second.empty())
+			continue;
+
+		auto array = components(setup);
+
+		if (!array)
+			continue;
+
+		auto hackable = donors->second.front().m_Hackable;
+		array->push_back(HRZ2::Ref<HRZ2::RTTIRefObject>(hackable));
+		recipient.m_Injected = hackable;
+
+		spdlog::info("[apex] {} can now be overridden (component {} from {})", recipient.m_UUID, hackable->m_UUID, donors->second.front().m_Setup->m_UUID);
+	}
 }
 
 static bool SafeReadQword(const void *Address, uint64_t& Value)

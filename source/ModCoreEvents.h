@@ -85,6 +85,27 @@ private:
 	std::unordered_set<std::string> m_RefFindLogged;
 	std::mutex m_RefFindMutex;
 
+	// Apex override: give spawn setups without a HackableComponentResource the one used by another spawn setup of the
+	// same entity resource
+	struct ApexRecipient
+	{
+		HRZ2::RTTIRefObject *m_Entity = nullptr;
+		HRZ2::RTTIRefObject *m_Injected = nullptr;
+		HRZ2::GGUUID m_UUID;
+	};
+
+	struct ApexDonor
+	{
+		HRZ2::RTTIRefObject *m_Setup = nullptr;
+		HRZ2::RTTIRefObject *m_Hackable = nullptr;
+	};
+
+	std::unordered_map<HRZ2::RTTIRefObject *, ApexRecipient> m_ApexRecipients;
+	std::unordered_map<HRZ2::RTTIRefObject *, std::vector<ApexDonor>> m_ApexDonors;
+	std::mutex m_ApexMutex;
+
+	const std::string& InjectTypeName(const HRZ2::RTTIRefObject *Object);
+	void TrackApexSetups(const HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRefObject>>& Objects, bool Loaded);
 	void FindReferences(const HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRefObject>>& Objects, bool Loaded);
 
 public:
