@@ -16,8 +16,10 @@
 #include <utility>
 #include <shared_mutex>
 #include <unordered_map>
+#include <unordered_set>
 #include "../ModConfiguration.h"
 #include "../ModCoreEvents.h"
+#include "Core/Entity.h"
 #include "Core/ProgramResource.h"
 #include "Core/RTTI.h"
 #include "Core/RTTIRefObject.h"
@@ -970,7 +972,138 @@ namespace HRZ2::GraphRuntime
 			ProbeFn m_Original = nullptr;
 			std::vector<std::string> m_Graphs;
 			std::optional<uint64_t> m_Force;
+			bool m_DescribeEntity = false;
+			bool m_DumpResult = false;
 		};
+
+		struct ComponentInfo
+		{
+			uint16_t m_Type;
+			const RTTI *m_RTTI;
+			RTTIRefObject *m_Resource;
+		};
+
+		// Reads an entity's components without trusting the pointer; no C++ objects with destructors here (SEH)
+		size_t ReadEntityComponents(void *Object, const RTTI **EntityType, RTTIRefObject **EntityResource, ComponentInfo *Out, size_t Max)
+		{
+			__try
+			{
+				auto entity = static_cast<Entity *>(Object);
+				*EntityType = entity->GetRTTI();
+				*EntityResource = entity->m_EntityResource.GetUntypedPtr();
+
+				const auto& components = entity->m_Components.m_Components;
+				const auto& types = entity->m_Components.m_ComponentTypes;
+				const size_t count = std::min<size_t>(components.size(), Max);
+
+				for (size_t i = 0; i < count; i++)
+				{
+					auto component = components.data()[i];
+					Out[i].m_Type = i < types.size() ? types.data()[i] : 0xFFFF;
+					Out[i].m_RTTI = component ? component->GetRTTI() : nullptr;
+					Out[i].m_Resource = component ? component->m_Resource.GetPtr() : nullptr;
+				}
+
+				return count;
+			}
+			__except (EXCEPTION_EXECUTE_HANDLER)
+			{
+				return SIZE_MAX;
+			}
+		}
+
+		const RTTI *SafeGetRTTI(void *Object)
+		{
+			__try
+			{
+				return static_cast<RTTIRefObject *>(Object)->GetRTTI();
+			}
+			__except (EXCEPTION_EXECUTE_HANDLER)
+			{
+				return nullptr;
+			}
+		}
+
+		RTTIRefObject *SafeComponentResource(void *Object)
+		{
+			__try
+			{
+				return static_cast<EntityComponent *>(Object)->m_Resource.GetPtr();
+			}
+			__except (EXCEPTION_EXECUTE_HANDLER)
+			{
+				return nullptr;
+			}
+		}
+
+		std::string ResourceLabel(RTTIRefObject *Resource)
+		{
+			if (!Resource)
+				return "-";
+
+			const auto rtti = SafeGetRTTI(Resource);
+			return std::format("{} {}", rtti ? rtti->GetSymbolName() : "?", Resource->m_UUID);
+		}
+
+		void DescribeEntity(void *Object)
+		{
+			std::array<ComponentInfo, 128> components {};
+			const RTTI *type = nullptr;
+			RTTIRefObject *resource = nullptr;
+			const auto count = ReadEntityComponents(Object, &type, &resource, components.data(), components.size());
+
+			if (count == SIZE_MAX || !type)
+			{
+				spdlog::info("[probe] {} is not a readable entity", Object);
+				return;
+			}
+
+			spdlog::info("[probe] entity {} {} resource {}: {} components", Object, type->GetSymbolName(), ResourceLabel(resource), count);
+
+			for (size_t i = 0; i < count; i++)
+			{
+				const auto& c = components[i];
+				spdlog::info(
+					"[probe]   [{}] type {} {} resource {}",
+					i,
+					c.m_Type,
+					c.m_RTTI ? c.m_RTTI->GetSymbolName() : "null",
+					ResourceLabel(c.m_Resource));
+			}
+		}
+
+		void DumpResultObject(uint64_t Result)
+		{
+			const auto object = reinterpret_cast<RTTIRefObject *>(Result);
+			const auto rtti = SafeGetRTTI(object);
+
+			if (!rtti)
+			{
+				spdlog::info("[probe] result {:#x} has no RTTI", Result);
+				return;
+			}
+
+			spdlog::info("[probe] result {:#x} is {}", Result, rtti->GetSymbolName());
+
+			// A component: its resource holds the data; otherwise dump the object itself
+			const auto name = rtti->GetSymbolName();
+
+			if (name.find("Resource") == std::string::npos)
+			{
+				if (auto resource = SafeComponentResource(object); resource && SafeGetRTTI(resource))
+				{
+					ModCoreEvents::GetInstance().DumpObject(resource, "probe result resource");
+					spdlog::info("[probe] dumped {} to asset_dump.txt", ResourceLabel(resource));
+					return;
+				}
+			}
+
+			ModCoreEvents::GetInstance().DumpObject(object, "probe result");
+			spdlog::info("[probe] dumped the result to asset_dump.txt");
+		}
+
+		std::mutex g_DescribedMutex;
+		std::unordered_set<uintptr_t> g_Described;
 
 		constexpr size_t MaxProbes = 8;
 		std::array<ProbeState, MaxProbes> g_Probes;
@@ -988,6 +1121,23 @@ namespace HRZ2::GraphRuntime
 				return result;
 
 			const auto original = result;
+
+			if (probe.m_DescribeEntity || probe.m_DumpResult)
+			{
+				bool describe = false;
+				bool dump = false;
+				{
+					std::scoped_lock lock(g_DescribedMutex);
+					describe = probe.m_DescribeEntity && g_Described.insert(reinterpret_cast<uintptr_t>(A)).second;
+					dump = probe.m_DumpResult && original && g_Described.insert(original | 1).second;
+				}
+
+				if (describe)
+					DescribeEntity(A);
+
+				if (dump)
+					DumpResultObject(original);
+			}
 
 			if (probe.m_Force)
 				result = *probe.m_Force;
@@ -1052,6 +1202,8 @@ namespace HRZ2::GraphRuntime
 				auto& probe = g_Probes[used];
 				probe.m_Rva = rva;
 				probe.m_Graphs = config.Graphs;
+				probe.m_DescribeEntity = config.DescribeEntity;
+				probe.m_DumpResult = config.DumpResult;
 
 				if (!config.Force.empty())
 				{

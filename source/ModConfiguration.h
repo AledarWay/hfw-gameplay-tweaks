@@ -38,6 +38,8 @@ namespace InternalModConfig
 		std::string Slot;				 // RVA of a native API slot in fullgame.dll
 		std::vector<std::string> Graphs; // Callers to log (watched graph tags), empty = any watched graph
 		std::string Force;				 // Empty = log only, otherwise the return value for those callers
+		bool DescribeEntity = false;	 // Treat the first argument as an entity and log its components once
+		bool DumpResult = false;		 // Dump a returned component's resource into asset_dump.txt once
 	};
 
 	struct SupercellLocation

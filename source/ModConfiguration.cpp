@@ -268,6 +268,8 @@ namespace InternalModConfig
 					p.Enabled = t["Enable"].value_or(true);
 					p.Slot = std::string(t["Slot"].value_or(""));
 					p.Force = std::string(t["Force"].value_or(""));
+					p.DescribeEntity = t["DescribeEntity"].value_or(false);
+					p.DumpResult = t["DumpResult"].value_or(false);
 					parseStringArray(t["Graphs"], p.Graphs);
 					o.SlotProbes.emplace_back(std::move(p));
 				});
