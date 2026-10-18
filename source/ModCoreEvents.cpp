@@ -65,6 +65,9 @@ ModCoreEvents::ModCoreEvents()
 			spdlog::error("Invalid AssetFindReferences UUID '{}'", text);
 	}
 
+	if (!m_ComponentInjects.empty() || !m_ComponentInjectRules.empty())
+		spdlog::info("[inject] {} fixed targets, {} type rules", m_ComponentInjects.size(), m_ComponentInjectRules.size());
+
 	// Comma-separated, case-insensitive substrings of RTTI type names or object UUIDs
 	for (const auto& part : ModConfiguration.AssetDumpTypes | std::views::split(','))
 	{
@@ -862,6 +865,9 @@ void ModCoreEvents::MatchInjectRulesLocked(HRZ2::RTTIRefObject *Object)
 	{
 		if (name->second != rule.m_TargetType)
 			continue;
+
+		if (m_InjectReported.insert(HRZ2::GGUUID {}).second)
+			spdlog::info("[inject] first {} seen: {}", name->second, Object->m_UUID);
 
 		try
 		{
