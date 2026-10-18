@@ -76,12 +76,14 @@ namespace Htn
 			MarkMount,
 			FailIfMount,
 			PassIfMount,
+			MarkMountInWater,
 		};
 
 		constexpr size_t MaxConditionalCells = 16;
 		std::array<std::atomic_uint64_t, MaxConditionalCells> g_CellOriginals;
 		size_t g_UsedConditionalCells = 0;
 		thread_local void *g_MountWorldState = nullptr;
+		thread_local bool g_MountInWater = false; // Set by "mark-mount-in-water" after "mark-mount" in the same pass
 
 		// pass-if-mount forces the condition in windows only, so the mount still picks other attacks in between
 		std::atomic_uint64_t g_PassWindowMs = 6000;
@@ -92,7 +94,16 @@ namespace Htn
 		uint64_t ConditionalCell(void *Planner, void *WorldState, void *Frame, void *R9)
 		{
 			if constexpr (K == CellKind::MarkMount)
+			{
 				g_MountWorldState = WorldState;
+				g_MountInWater = false;
+			}
+
+			if constexpr (K == CellKind::MarkMountInWater)
+			{
+				if (WorldState == g_MountWorldState)
+					g_MountInWater = true;
+			}
 
 			if constexpr (K == CellKind::FailIfMount)
 			{
@@ -113,7 +124,8 @@ namespace Htn
 					start = now;
 				}
 
-				if (WorldState == g_MountWorldState && now - start < window)
+				// The flying ranged attack can't run while swimming, forcing it there only stalls the mount
+				if (WorldState == g_MountWorldState && !g_MountInWater && now - start < window)
 				{
 					const auto next = *reinterpret_cast<uint64_t **>(reinterpret_cast<uintptr_t>(Frame) + 0x10);
 					return reinterpret_cast<CellFn>(*next)(Planner, WorldState, next, R9);
@@ -132,6 +144,7 @@ namespace Htn
 		const auto MarkMountCells = MakeCellTable<CellKind::MarkMount>(std::make_index_sequence<MaxConditionalCells>());
 		const auto FailIfMountCells = MakeCellTable<CellKind::FailIfMount>(std::make_index_sequence<MaxConditionalCells>());
 		const auto PassIfMountCells = MakeCellTable<CellKind::PassIfMount>(std::make_index_sequence<MaxConditionalCells>());
+		const auto MarkMountInWaterCells = MakeCellTable<CellKind::MarkMountInWater>(std::make_index_sequence<MaxConditionalCells>());
 
 		uintptr_t g_Base = 0;
 		std::atomic_bool g_Installed = false;
@@ -262,7 +275,8 @@ namespace Htn
 
 			if (P.m_Enabled && !P.m_Applied)
 			{
-				const bool conditional = P.m_Value == "mark-mount" || P.m_Value == "fail-if-mount" || P.m_Value == "pass-if-mount";
+				const bool conditional = P.m_Value == "mark-mount" || P.m_Value == "fail-if-mount" || P.m_Value == "pass-if-mount" ||
+										 P.m_Value == "mark-mount-in-water";
 				std::optional<uint64_t> value;
 
 				if (!SafeCopy(&P.m_Original, address, sizeof(uint64_t)))
@@ -285,7 +299,10 @@ namespace Htn
 					}
 
 					g_CellOriginals[P.m_Slot] = P.m_Original;
-					const auto& table = P.m_Value == "mark-mount" ? MarkMountCells : P.m_Value == "fail-if-mount" ? FailIfMountCells : PassIfMountCells;
+					const auto& table = P.m_Value == "mark-mount"		? MarkMountCells
+									 : P.m_Value == "fail-if-mount" ? FailIfMountCells
+									 : P.m_Value == "pass-if-mount" ? PassIfMountCells
+																	: MarkMountInWaterCells;
 					value = reinterpret_cast<uint64_t>(table[P.m_Slot]);
 				}
 				else
@@ -742,6 +759,7 @@ namespace Htn
 				{ "sunwing", 0x497A0, "pass-if-mount", c.FlyingRangedAttack, "Sunwing mount: allow the flying plasma barrage" },
 
 				{ "waterwing", 0xAFE0, "mark-mount", true, "Waterwing: detect the called mount" },
+				{ "waterwing", 0x14CA0, "mark-mount-in-water", true, "Waterwing: detect the called mount in water" },
 				{ "waterwing", 0x2E5A0, "fail", c.SkipIdleInAir, "Waterwing: in the air, skip go_to_hacker/glide_patrol" },
 				{ "waterwing", 0x21A48, "fail", c.SkipIdleInAir, "Waterwing: in the air, skip wait_hacked (continue)" },
 				{ "waterwing", 0x21A68, "fail", c.SkipIdleInAir, "Waterwing: in the air, skip wait_hacked (begin)" },
