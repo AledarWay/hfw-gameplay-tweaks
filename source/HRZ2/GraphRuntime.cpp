@@ -11,6 +11,9 @@
 #include <format>
 #include <map>
 #include <mutex>
+#include <optional>
+#include <type_traits>
+#include <utility>
 #include <shared_mutex>
 #include <unordered_map>
 #include "../ModConfiguration.h"
@@ -958,6 +961,124 @@ namespace HRZ2::GraphRuntime
 			return true;
 		}
 
+		// Slot probes: log what other native API functions return to watched graphs, optionally forcing the result
+		using ProbeFn = uint64_t (*)(void *, void *, void *, void *);
+
+		struct ProbeState
+		{
+			uintptr_t m_Rva = 0;
+			ProbeFn m_Original = nullptr;
+			std::vector<std::string> m_Graphs;
+			std::optional<uint64_t> m_Force;
+		};
+
+		constexpr size_t MaxProbes = 8;
+		std::array<ProbeState, MaxProbes> g_Probes;
+		std::mutex g_ProbeMutex;
+		std::map<std::tuple<size_t, size_t, uint64_t, uint64_t>, uint64_t> g_ProbeLogged;
+
+		template<size_t N>
+		uint64_t ProbeHook(void *A, void *B, void *C, void *D)
+		{
+			const auto& probe = g_Probes[N];
+			auto result = probe.m_Original(A, B, C, D);
+			const auto range = FindRange(_ReturnAddress());
+
+			if (!range || !TagMatches(g_Tags[range->m_Tag], probe.m_Graphs))
+				return result;
+
+			const auto original = result;
+
+			if (probe.m_Force)
+				result = *probe.m_Force;
+
+			const auto context = ContextId(A);
+			const auto second = reinterpret_cast<uint64_t>(B);
+
+			std::scoped_lock lock(g_ProbeMutex);
+			auto [itr, inserted] = g_ProbeLogged.try_emplace(std::make_tuple(N, range->m_Tag, context, second), original);
+
+			if (inserted || itr->second != original)
+			{
+				itr->second = original;
+				spdlog::info(
+					"[probe] {:#x} from {}: a={:#x} ctx={:#x} b={:#x} -> {:#x}{}",
+					probe.m_Rva,
+					g_Tags[range->m_Tag],
+					reinterpret_cast<uint64_t>(A),
+					context,
+					second,
+					original,
+					probe.m_Force ? std::format(" (forced {:#x})", result) : "");
+			}
+
+			return result;
+		}
+
+		template<size_t... I>
+		constexpr auto MakeProbeTable(std::index_sequence<I...>)
+		{
+			return std::array<ProbeFn, sizeof...(I)> { &ProbeHook<I>... };
+		}
+
+		const auto ProbeHooks = MakeProbeTable(std::make_index_sequence<MaxProbes>());
+
+		void InstallProbes()
+		{
+			size_t used = 0;
+
+			for (const auto& config : ModConfiguration.SlotProbes)
+			{
+				if (!config.Enabled)
+					continue;
+
+				if (used >= MaxProbes)
+				{
+					spdlog::error("[probe] at most {} slot probes", MaxProbes);
+					break;
+				}
+
+				uintptr_t rva = 0;
+				const bool hex = config.Slot.starts_with("0x");
+
+				if (std::from_chars(config.Slot.data() + (hex ? 2 : 0), config.Slot.data() + config.Slot.size(), rva, hex ? 16 : 10).ec !=
+						std::errc() ||
+					rva % 8 != 0)
+				{
+					spdlog::error("[probe] invalid slot '{}'", config.Slot);
+					continue;
+				}
+
+				auto& probe = g_Probes[used];
+				probe.m_Rva = rva;
+				probe.m_Graphs = config.Graphs;
+
+				if (!config.Force.empty())
+				{
+					if (config.Force == "true" || config.Force == "false")
+						probe.m_Force = config.Force == "true" ? 1 : 0;
+					else
+					{
+						uint64_t value = 0;
+						const bool forceHex = config.Force.starts_with("0x");
+
+						if (std::from_chars(config.Force.data() + (forceHex ? 2 : 0), config.Force.data() + config.Force.size(), value, forceHex ? 16 : 10)
+								.ec == std::errc())
+							probe.m_Force = value;
+					}
+				}
+
+				if (!SwapSlot(rva, reinterpret_cast<std::remove_pointer_t<ProbeFn> *>(ProbeHooks[used]), &probe.m_Original))
+				{
+					spdlog::error("[probe] slot {:#x} is empty or not native code", rva);
+					continue;
+				}
+
+				spdlog::info("[probe] slot {:#x} hooked{}", rva, probe.m_Force ? std::format(", forcing {:#x}", *probe.m_Force) : "");
+				used++;
+			}
+		}
+
 		void CollectExports(const ExportEntry *Table, uint32_t Count, void *)
 		{
 			g_Exports.reserve(Count);
@@ -1087,6 +1208,7 @@ namespace HRZ2::GraphRuntime
 		}
 
 		spdlog::info("[graph] installed: {} exported graph functions", g_Exports.size());
+		InstallProbes();
 		RescanCachedGraphsLocked();
 
 		if (ModConfiguration.NativeFactHooks)

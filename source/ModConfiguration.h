@@ -32,6 +32,14 @@ namespace InternalModConfig
 		std::string Value;
 	};
 
+	struct SlotProbe
+	{
+		bool Enabled = true;
+		std::string Slot;				 // RVA of a native API slot in fullgame.dll
+		std::vector<std::string> Graphs; // Callers to log (watched graph tags), empty = any watched graph
+		std::string Force;				 // Empty = log only, otherwise the return value for those callers
+	};
+
 	struct SupercellLocation
 	{
 		bool Enabled = true;
@@ -118,6 +126,9 @@ namespace InternalModConfig
 
 		// [[HTNPatch]]
 		std::vector<HtnPatch> HtnPatches;
+
+		// [[SlotProbe]]
+		std::vector<SlotProbe> SlotProbes;
 
 		// [Supercells]
 		bool SupercellIncludeAllLocations;

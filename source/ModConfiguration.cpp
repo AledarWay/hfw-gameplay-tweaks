@@ -258,6 +258,21 @@ namespace InternalModConfig
 				});
 		}
 
+		// [[SlotProbe]]
+		if (auto probes = Table["SlotProbe"].as_array())
+		{
+			probes->for_each(
+				[&](const toml::table& t)
+				{
+					SlotProbe p;
+					p.Enabled = t["Enable"].value_or(true);
+					p.Slot = std::string(t["Slot"].value_or(""));
+					p.Force = std::string(t["Force"].value_or(""));
+					parseStringArray(t["Graphs"], p.Graphs);
+					o.SlotProbes.emplace_back(std::move(p));
+				});
+		}
+
 		// [[HTNPatch]]
 		if (auto htnArray = Table["HTNPatch"].as_array())
 		{
