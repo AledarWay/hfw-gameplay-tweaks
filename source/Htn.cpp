@@ -77,6 +77,7 @@ namespace Htn
 			FailIfMount,
 			PassIfMount,
 			MarkMountInWater,
+			FailIfMountInWater,
 		};
 
 		constexpr size_t MaxConditionalCells = 16;
@@ -97,6 +98,12 @@ namespace Htn
 			{
 				g_MountWorldState = WorldState;
 				g_MountInWater = false;
+			}
+
+			if constexpr (K == CellKind::FailIfMountInWater)
+			{
+				if (WorldState == g_MountWorldState && g_MountInWater)
+					return 0;
 			}
 
 			if constexpr (K == CellKind::MarkMountInWater)
@@ -145,6 +152,7 @@ namespace Htn
 		const auto FailIfMountCells = MakeCellTable<CellKind::FailIfMount>(std::make_index_sequence<MaxConditionalCells>());
 		const auto PassIfMountCells = MakeCellTable<CellKind::PassIfMount>(std::make_index_sequence<MaxConditionalCells>());
 		const auto MarkMountInWaterCells = MakeCellTable<CellKind::MarkMountInWater>(std::make_index_sequence<MaxConditionalCells>());
+		const auto FailIfMountInWaterCells = MakeCellTable<CellKind::FailIfMountInWater>(std::make_index_sequence<MaxConditionalCells>());
 
 		uintptr_t g_Base = 0;
 		std::atomic_bool g_Installed = false;
@@ -276,7 +284,7 @@ namespace Htn
 			if (P.m_Enabled && !P.m_Applied)
 			{
 				const bool conditional = P.m_Value == "mark-mount" || P.m_Value == "fail-if-mount" || P.m_Value == "pass-if-mount" ||
-										 P.m_Value == "mark-mount-in-water";
+										 P.m_Value == "mark-mount-in-water" || P.m_Value == "fail-if-mount-in-water";
 				std::optional<uint64_t> value;
 
 				if (!SafeCopy(&P.m_Original, address, sizeof(uint64_t)))
@@ -302,7 +310,8 @@ namespace Htn
 					const auto& table = P.m_Value == "mark-mount"		? MarkMountCells
 									 : P.m_Value == "fail-if-mount" ? FailIfMountCells
 									 : P.m_Value == "pass-if-mount" ? PassIfMountCells
-																	: MarkMountInWaterCells;
+									 : P.m_Value == "mark-mount-in-water" ? MarkMountInWaterCells
+																		  : FailIfMountInWaterCells;
 					value = reinterpret_cast<uint64_t>(table[P.m_Slot]);
 				}
 				else
@@ -773,6 +782,10 @@ namespace Htn
 				{ "waterwing", 0x30F98, "fail-if-mount", c.NoLandingNextToTarget, "Waterwing mount: don't land next to the target" },
 				{ "waterwing", 0x59978, "fail-if-mount", c.NoLandingNextToTarget, "Waterwing mount: don't land next to the target (2)" },
 				{ "waterwing", 0x513F8, "pass-if-mount", c.FlyingRangedAttack, "Waterwing mount: allow the flying gravel spit" },
+				{ "waterwing", 0x5E770, "fail-if-mount-in-water", c.NoEvadeInWater, "Waterwing mount: no air dodge in water (continue)" },
+				{ "waterwing", 0x5E880, "fail-if-mount-in-water", c.NoEvadeInWater, "Waterwing mount: no air dodge in water (begin)" },
+				{ "waterwing", 0x587D0, "fail-if-mount-in-water", c.NoEvadeInWater, "Waterwing mount: no air dodge in water (continue 2)" },
+				{ "waterwing", 0x58950, "fail-if-mount-in-water", c.NoEvadeInWater, "Waterwing mount: no air dodge in water (begin 2)" },
 			};
 
 			for (const auto& preset : presets)

@@ -101,6 +101,7 @@ namespace InternalModConfig
 			bool SkipWholeLandedBranch;
 			bool NoLandingNextToTarget;
 			bool FlyingRangedAttack;
+			bool NoEvadeInWater;
 			double RangedAttackWindow;
 			double RangedAttackCooldown;
 		} FlyingMountAI;

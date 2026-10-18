@@ -23,7 +23,7 @@ namespace Htn
 		bool m_Enabled = true;
 		std::string m_Domain;
 		uint32_t m_Offset = 0; // Byte offset in the pool
-		std::string m_Value;   // Number, "pred:<name>", "sym:<name>", "fail", "mark-mount", "fail-if-mount", "pass-if-mount" or "mark-mount-in-water"
+		std::string m_Value;   // Number, "pred:<name>", "sym:<name>", "fail", "mark-mount", "fail-if-mount", "pass-if-mount", "mark-mount-in-water" or "fail-if-mount-in-water"
 		std::string m_Label;   // Shown in the menu, empty for [[HTNPatch]] entries
 		bool m_Applied = false;
 		uint64_t m_Original = 0;

@@ -199,6 +199,7 @@ namespace InternalModConfig
 			f.SkipWholeLandedBranch = get("SkipWholeLandedBranch", false);
 			f.NoLandingNextToTarget = get("NoLandingNextToTarget", true);
 			f.FlyingRangedAttack = get("FlyingRangedAttack", true);
+			f.NoEvadeInWater = get("NoEvadeInWater", true);
 			f.RangedAttackWindow = get("RangedAttackWindow", 6.0);
 			f.RangedAttackCooldown = get("RangedAttackCooldown", 12.0);
 		}
