@@ -873,6 +873,9 @@ void ModCoreEvents::TrackApexSetups(const HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRefObj
 		if (!array)
 			continue;
 
+		if (ModConfiguration.ApexOverrideDebug && m_ApexDebugLogged.insert(recipient.m_UUID).second)
+			LogApexCandidates(recipient, donors->second);
+
 		// Several variants share one entity resource (e.g. elemental ones), each with its own hackable component and
 		// mounted weapons. Take the donor that has the most of the recipient's other components.
 		const ApexDonor *best = nullptr;
@@ -910,6 +913,59 @@ void ModCoreEvents::TrackApexSetups(const HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRefObj
 
 		spdlog::info("[apex] {} can now be overridden (component {} from {}, {}/{} components shared)", recipient.m_UUID, hackable->m_UUID,
 			best->m_Setup->m_UUID, bestShared, total);
+	}
+}
+
+void ModCoreEvents::LogApexCandidates(const ApexRecipient& Recipient, const std::vector<ApexDonor>& Donors)
+{
+	struct Candidate
+	{
+		const ApexDonor *m_Donor;
+		size_t m_Shared;
+	};
+
+	// Best donor per distinct hackable component
+	std::vector<Candidate> candidates;
+
+	for (const auto& donor : Donors)
+	{
+		std::vector<HRZ2::RTTIRefObject *> shared;
+		std::ranges::set_intersection(Recipient.m_Components, donor.m_Components, std::back_inserter(shared));
+
+		auto itr = std::ranges::find_if(candidates, [&](const Candidate& c) { return c.m_Donor->m_Hackable == donor.m_Hackable; });
+
+		if (itr == candidates.end())
+			candidates.emplace_back(Candidate { &donor, shared.size() });
+		else if (shared.size() > itr->m_Shared)
+			*itr = Candidate { &donor, shared.size() };
+	}
+
+	std::ranges::sort(candidates, [](const Candidate& a, const Candidate& b) { return a.m_Shared > b.m_Shared; });
+
+	spdlog::info("[apex-debug] {} ({} components, {} donors, {} hackables)", Recipient.m_UUID, Recipient.m_Components.size(), Donors.size(),
+		candidates.size());
+
+	auto describe = [&](HRZ2::RTTIRefObject *Object) { return std::format("{} {}", InjectTypeName(Object), Object->m_UUID); };
+
+	for (size_t i = 0; i < candidates.size(); i++)
+	{
+		const auto& c = candidates[i];
+
+		spdlog::info("[apex-debug]   hackable {} via {}: shared {}, donor has {}", c.m_Donor->m_Hackable->m_UUID, c.m_Donor->m_Setup->m_UUID,
+			c.m_Shared, c.m_Donor->m_Components.size());
+
+		if (i >= 3)
+			continue;
+
+		std::vector<HRZ2::RTTIRefObject *> onlyRecipient, onlyDonor;
+		std::ranges::set_difference(Recipient.m_Components, c.m_Donor->m_Components, std::back_inserter(onlyRecipient));
+		std::ranges::set_difference(c.m_Donor->m_Components, Recipient.m_Components, std::back_inserter(onlyDonor));
+
+		for (auto object : onlyRecipient)
+			spdlog::info("[apex-debug]     apex only:  {}", describe(object));
+
+		for (auto object : onlyDonor)
+			spdlog::info("[apex-debug]     donor only: {}", describe(object));
 	}
 }
 

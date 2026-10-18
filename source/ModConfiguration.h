@@ -110,6 +110,7 @@ namespace InternalModConfig
 		bool CalledFlyingMountFights;
 		bool AllowApexOverride;
 		bool ApexOverrideAllVariants;
+		bool ApexOverrideDebug;
 
 		// [FlyingMountAI]
 		struct

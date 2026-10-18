@@ -168,6 +168,7 @@ namespace InternalModConfig
 			PARSE_TOML_MEMBER(gameplay, AllowAggressiveFlyingMountOverride);
 			PARSE_TOML_MEMBER(gameplay, AllowApexOverride);
 			PARSE_TOML_MEMBER(gameplay, ApexOverrideAllVariants);
+			PARSE_TOML_MEMBER(gameplay, ApexOverrideDebug);
 			PARSE_TOML_MEMBER(gameplay, CalledFlyingMountFights);
 		}
 

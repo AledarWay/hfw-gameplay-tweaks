@@ -106,6 +106,9 @@ private:
 	std::unordered_map<HRZ2::RTTIRefObject *, ApexRecipient> m_ApexRecipients;
 	std::unordered_map<HRZ2::RTTIRefObject *, std::vector<ApexDonor>> m_ApexDonors;
 	std::mutex m_ApexMutex;
+	std::unordered_set<HRZ2::GGUUID> m_ApexDebugLogged;
+
+	void LogApexCandidates(const ApexRecipient& Recipient, const std::vector<ApexDonor>& Donors);
 
 	const std::string& InjectTypeName(const HRZ2::RTTIRefObject *Object);
 	void TrackApexSetups(const HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRefObject>>& Objects, bool Loaded);
