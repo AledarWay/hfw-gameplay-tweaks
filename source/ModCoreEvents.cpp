@@ -712,6 +712,7 @@ static bool IsApexTuningType(const std::string& Type)
 		"CharacterDescriptionComponentResource",
 		"InitialFactsComponentResource",
 		"ShaderOverridesComponentResource",
+		"DestructibilityPartDamageRemapComponentResource",
 	};
 
 	return types.contains(Type);
@@ -991,7 +992,32 @@ void ModCoreEvents::LogApexCandidates(const ApexRecipient& Recipient, const std:
 	spdlog::info("[apex-debug] {} ({} components, {} donors, {} hackables)", Recipient.m_UUID, Recipient.m_Components.size(), Donors.size(),
 		candidates.size());
 
-	auto describe = [&](HRZ2::RTTIRefObject *Object) { return std::format("{} {}", InjectTypeName(Object), Object->m_UUID); };
+	auto describe = [&](HRZ2::RTTIRefObject *Object)
+	{
+		auto text = std::format("{} {}", InjectTypeName(Object), Object->m_UUID);
+
+		if (InjectTypeName(Object) == "EntityComponentSetResource")
+		{
+			try
+			{
+				auto& set = Object->GetMemberRefUnsafe<HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRefObject>>>("ComponentResources");
+				text += " {";
+
+				for (size_t i = 0; i < set.size(); i++)
+				{
+					if (set[i].GetPtr())
+						text += std::format(" {} {}", InjectTypeName(set[i].GetPtr()), set[i]->m_UUID);
+				}
+
+				text += " }";
+			}
+			catch (const std::exception&)
+			{
+			}
+		}
+
+		return text;
+	};
 
 	for (size_t i = 0; i < candidates.size(); i++)
 	{
