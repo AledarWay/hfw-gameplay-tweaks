@@ -748,10 +748,12 @@ namespace Htn
 				{ "waterwing", 0x22200, "fail", c.SkipIdleLanded, "Waterwing: landed, skip wait_hacked (continue)" },
 				{ "waterwing", 0x22220, "fail", c.SkipIdleLanded, "Waterwing: landed, skip wait_hacked (begin)" },
 				{ "waterwing", 0x22130, "fail", c.SkipGoToHackerLanded, "Waterwing: landed, skip go_to_hacker" },
+				{ "waterwing", 0x2ECD8, "fail", c.SkipIdleInWater, "Waterwing: in water, skip go_to_hacker/glide_patrol" },
 				{ "waterwing", 0x21E70, "fail", c.SkipIdleInWater, "Waterwing: in water, skip wait_hacked (continue)" },
 				{ "waterwing", 0x21E90, "fail", c.SkipIdleInWater, "Waterwing: in water, skip wait_hacked (begin)" },
 				{ "waterwing", 0x21E08, "fail", c.SkipSwimNearHacker, "Waterwing: in water, skip swim_near_hacker_and_wait" },
 				{ "waterwing", 0x30F98, "fail-if-mount", c.NoLandingNextToTarget, "Waterwing mount: don't land next to the target" },
+				{ "waterwing", 0x59978, "fail-if-mount", c.NoLandingNextToTarget, "Waterwing mount: don't land next to the target (2)" },
 				{ "waterwing", 0x513F8, "pass-if-mount", c.FlyingRangedAttack, "Waterwing mount: allow the flying gravel spit" },
 			};
 
