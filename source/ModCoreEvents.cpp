@@ -820,7 +820,27 @@ void ModCoreEvents::TrackApexSetups(const HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRefObj
 	{
 		for (auto& object : Objects)
 		{
-			if (!object.GetPtr() || InjectTypeName(object.GetPtr()) != "SpawnSetup")
+			if (!object.GetPtr())
+				continue;
+
+			// Research: which spawn setups the mount call components can spawn
+			if (ModConfiguration.ApexOverrideDebug && InjectTypeName(object.GetPtr()).ends_with("CallComponentResource"))
+			{
+				try
+				{
+					auto& setups = object->GetMemberRefUnsafe<HRZ2::Array<HRZ2::StreamingRef<HRZ2::RTTIRefObject>>>("HorseSpawnSetups");
+					spdlog::info("[apex-debug] {} {}: {} spawn setups", InjectTypeName(object.GetPtr()), object->m_UUID, setups.size());
+
+					for (size_t i = 0; i < setups.size(); i++)
+						spdlog::info("[apex-debug]   [{}] {} {}", i, setups[i].GetUUID(), setups[i].GetPtr() ? "loaded" : "not loaded");
+				}
+				catch (const std::exception& e)
+				{
+					spdlog::info("[apex-debug] {}: {}", InjectTypeName(object.GetPtr()), e.what());
+				}
+			}
+
+			if (InjectTypeName(object.GetPtr()) != "SpawnSetup")
 				continue;
 
 			HRZ2::RTTIRefObject *entity = nullptr;
