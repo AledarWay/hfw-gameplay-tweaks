@@ -41,9 +41,10 @@ ModCoreEvents::ModCoreEvents()
 		if (!c.Enabled)
 			continue;
 
-		auto target = HRZ2::GGUUID::TryParse(c.Target);
-		auto contains = HRZ2::GGUUID::TryParse(c.TargetContains);
-		auto component = HRZ2::GGUUID::TryParse(c.Component);
+		auto parse = [](const std::string& Text) { return Text.empty() ? std::nullopt : HRZ2::GGUUID::TryParse(Text); };
+		auto target = parse(c.Target);
+		auto contains = parse(c.TargetContains);
+		auto component = parse(c.Component);
 
 		if (component && !c.Field.empty() && target)
 			m_ComponentInjects.emplace_back(ComponentInject { *target, c.Field, *component });
