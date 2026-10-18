@@ -56,12 +56,24 @@ private:
 		HRZ2::GGUUID m_Component;
 	};
 
+	struct ComponentInjectRule
+	{
+		std::string m_TargetType;
+		HRZ2::GGUUID m_TargetContains;
+		std::string m_Field;
+		HRZ2::GGUUID m_Component;
+	};
+
 	std::vector<ComponentInject> m_ComponentInjects;
+	std::vector<ComponentInjectRule> m_ComponentInjectRules;
+	std::unordered_map<const void *, std::string> m_InjectTypeNames;
+	std::unordered_set<HRZ2::GGUUID> m_InjectReported;
 	std::unordered_map<HRZ2::GGUUID, HRZ2::RTTIRefObject *> m_InjectObjects;
 	std::mutex m_InjectMutex;
 
 	void TrackInjectObjectsLocked(const HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRefObject>>& Objects, bool Loaded);
 	void ApplyComponentInjectsLocked();
+	void MatchInjectRulesLocked(HRZ2::RTTIRefObject *Object);
 
 	// Asset dumping
 	std::vector<std::string> m_AssetDumpFilters;

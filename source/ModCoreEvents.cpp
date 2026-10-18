@@ -35,24 +35,25 @@ HRZ2::RTTIObjectTweaker::SetValueVisitor::EMode ModCoreEvents::ValuePatchVisitor
 
 ModCoreEvents::ModCoreEvents()
 {
-	// Comma-separated, case-insensitive substrings of RTTI type names or object UUIDs
 	for (const auto& c : ModConfiguration.ComponentInjects)
 	{
 		if (!c.Enabled)
 			continue;
 
 		auto target = HRZ2::GGUUID::TryParse(c.Target);
+		auto contains = HRZ2::GGUUID::TryParse(c.TargetContains);
 		auto component = HRZ2::GGUUID::TryParse(c.Component);
 
-		if (!target || !component || c.Field.empty())
-		{
-			spdlog::error("Invalid [[ComponentInject]] entry: Target '{}', Field '{}', Component '{}'", c.Target, c.Field, c.Component);
-			continue;
-		}
-
-		m_ComponentInjects.emplace_back(ComponentInject { *target, c.Field, *component });
+		if (component && !c.Field.empty() && target)
+			m_ComponentInjects.emplace_back(ComponentInject { *target, c.Field, *component });
+		else if (component && !c.Field.empty() && !c.TargetType.empty() && contains)
+			m_ComponentInjectRules.emplace_back(ComponentInjectRule { c.TargetType, *contains, c.Field, *component });
+		else
+			spdlog::error("Invalid [[ComponentInject]] entry: Target '{}', TargetType '{}', TargetContains '{}', Field '{}', Component '{}'",
+				c.Target, c.TargetType, c.TargetContains, c.Field, c.Component);
 	}
 
+	// Comma-separated, case-insensitive substrings of RTTI type names or object UUIDs
 	for (const auto& part : ModConfiguration.AssetDumpTypes | std::views::split(','))
 	{
 		std::string filter { std::string_view(part) };
@@ -566,7 +567,7 @@ void ModCoreEvents::OnBeforeUnloadGroup(const HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRe
 	if (ModConfiguration.EnableAssetLogging)
 		spdlog::info("OnBeforeUnloadGroup");
 
-	if (!m_ComponentInjects.empty())
+	if (!m_ComponentInjects.empty() || !m_ComponentInjectRules.empty())
 	{
 		std::scoped_lock lock(m_InjectMutex);
 		TrackInjectObjectsLocked(Objects, false);
@@ -649,7 +650,7 @@ void ModCoreEvents::OnLoadAssetGroup(const HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRefOb
 			visitAll(itr->second);
 	}
 
-	if (!m_ComponentInjects.empty())
+	if (!m_ComponentInjects.empty() || !m_ComponentInjectRules.empty())
 	{
 		std::scoped_lock lock(m_InjectMutex);
 		TrackInjectObjectsLocked(Objects, true);
@@ -667,6 +668,10 @@ void ModCoreEvents::TrackInjectObjectsLocked(const HRZ2::Array<HRZ2::Ref<HRZ2::R
 			continue;
 
 		const auto uuid = object->m_UUID;
+
+		if (Loaded && !m_ComponentInjectRules.empty())
+			MatchInjectRulesLocked(object.GetPtr());
+
 		const bool used = std::ranges::any_of(m_ComponentInjects, [&](const auto& c) { return c.m_Target == uuid || c.m_Component == uuid; });
 
 		if (!used)
@@ -710,6 +715,58 @@ void ModCoreEvents::TrackInjectObjectsLocked(const HRZ2::Array<HRZ2::Ref<HRZ2::R
 		}
 
 		m_InjectObjects.erase(uuid);
+	}
+}
+
+void ModCoreEvents::MatchInjectRulesLocked(HRZ2::RTTIRefObject *Object)
+{
+	const HRZ2::RTTI *rtti = Object->GetRTTI();
+	auto name = m_InjectTypeNames.find(rtti);
+
+	if (name == m_InjectTypeNames.end())
+		name = m_InjectTypeNames.emplace(rtti, rtti->GetSymbolName()).first;
+
+	for (const auto& rule : m_ComponentInjectRules)
+	{
+		if (name->second != rule.m_TargetType)
+			continue;
+
+		try
+		{
+			auto& array = Object->GetMemberRefUnsafe<HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRefObject>>>(rule.m_Field.c_str());
+			bool contains = false;
+			bool hasComponent = false;
+
+			for (size_t i = 0; i < array.size(); i++)
+			{
+				if (!array[i].GetPtr())
+					continue;
+
+				contains |= array[i]->m_UUID == rule.m_TargetContains;
+				hasComponent |= array[i]->m_UUID == rule.m_Component;
+			}
+
+			if (hasComponent && !contains && m_InjectReported.insert(Object->m_UUID).second)
+				spdlog::info("[inject] {} {} already references {}", name->second, Object->m_UUID, rule.m_Component);
+
+			if (!contains)
+				continue;
+
+			const bool known = std::ranges::any_of(m_ComponentInjects, [&](const auto& c)
+			{
+				return c.m_Target == Object->m_UUID && c.m_Component == rule.m_Component && c.m_Field == rule.m_Field;
+			});
+
+			if (!known)
+			{
+				m_ComponentInjects.emplace_back(ComponentInject { Object->m_UUID, rule.m_Field, rule.m_Component });
+				spdlog::info("[inject] matched {} {} (references {})", name->second, Object->m_UUID, rule.m_TargetContains);
+			}
+		}
+		catch (const std::exception& e)
+		{
+			spdlog::error("[inject] {} {}: {}", name->second, Object->m_UUID, e.what());
+		}
 	}
 }
 

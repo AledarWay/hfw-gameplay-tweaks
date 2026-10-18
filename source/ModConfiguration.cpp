@@ -267,6 +267,8 @@ namespace InternalModConfig
 					ComponentInject c;
 					c.Enabled = t["Enable"].value_or(true);
 					c.Target = std::string(t["Target"].value_or(""));
+					c.TargetType = std::string(t["TargetType"].value_or(""));
+					c.TargetContains = std::string(t["TargetContains"].value_or(""));
 					c.Field = std::string(t["Field"].value_or("ComponentResources"));
 					c.Component = std::string(t["Component"].value_or(""));
 					o.ComponentInjects.emplace_back(std::move(c));

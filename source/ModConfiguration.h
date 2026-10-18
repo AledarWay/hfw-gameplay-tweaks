@@ -36,6 +36,8 @@ namespace InternalModConfig
 	{
 		bool Enabled = true;
 		std::string Target;	   // UUID of the object whose array receives the component (e.g. an EntityComponentSetResource)
+		std::string TargetType;	   // Or: every object of this RTTI type...
+		std::string TargetContains; // ...whose array already references this UUID
 		std::string Field;	   // Array member of the target, e.g. "ComponentResources"
 		std::string Component; // UUID of the component resource to add
 	};
