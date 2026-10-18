@@ -698,7 +698,24 @@ const std::string& ModCoreEvents::InjectTypeName(const HRZ2::RTTIRefObject *Obje
 	return name->second;
 }
 
-constexpr size_t ApexMinSharedPercent = 90;
+// Components that Apex spawn setups replace with their own tuned versions
+static bool IsApexTuningType(const std::string& Type)
+{
+	static const std::unordered_set<std::string> types = {
+		"DamageModifierComponentResource",
+		"DamageDealtModifierComponentResource",
+		"LootComponentResource",
+		"CollectableRobotComponentResource",
+		"HitReactionComponentResource",
+		"DestructibilityResource",
+		"FocusTargetComponentResource",
+		"CharacterDescriptionComponentResource",
+		"InitialFactsComponentResource",
+		"ShaderOverridesComponentResource",
+	};
+
+	return types.contains(Type);
+}
 
 void ModCoreEvents::TrackApexSetups(const HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRefObject>>& Objects, bool Loaded)
 {
@@ -876,15 +893,45 @@ void ModCoreEvents::TrackApexSetups(const HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRefObj
 		if (ModConfiguration.ApexOverrideDebug && m_ApexDebugLogged.insert(recipient.m_UUID).second)
 			LogApexCandidates(recipient, donors->second);
 
-		// Several variants share one entity resource (e.g. elemental ones), each with its own hackable component and
-		// mounted weapons. Take the donor that has the most of the recipient's other components.
+		// Many machines share one entity resource, and variants of a machine differ in weapons and parts. A donor fits
+		// when the only differences are the per-variant tuning components (damage, loot, description...) plus node
+		// graphs, and Apex-only component sets.
 		const ApexDonor *best = nullptr;
 		size_t bestShared = 0;
+		std::string closestMismatch;
 
 		for (const auto& donor : donors->second)
 		{
-			std::vector<HRZ2::RTTIRefObject *> shared;
+			std::vector<HRZ2::RTTIRefObject *> shared, onlyApex, onlyDonor;
 			std::ranges::set_intersection(recipient.m_Components, donor.m_Components, std::back_inserter(shared));
+			std::ranges::set_difference(recipient.m_Components, donor.m_Components, std::back_inserter(onlyApex));
+			std::ranges::set_difference(donor.m_Components, recipient.m_Components, std::back_inserter(onlyDonor));
+
+			std::string mismatch;
+
+			for (auto object : onlyApex)
+			{
+				const auto& type = InjectTypeName(object);
+
+				if (!IsApexTuningType(type) && type != "NodeGraphComponentResource" && type != "EntityComponentSetResource")
+					mismatch += std::format(" +{}", type);
+			}
+
+			for (auto object : onlyDonor)
+			{
+				const auto& type = InjectTypeName(object);
+
+				if (!IsApexTuningType(type) && type != "NodeGraphComponentResource")
+					mismatch += std::format(" -{}", type);
+			}
+
+			if (!mismatch.empty())
+			{
+				if (closestMismatch.empty() || mismatch.size() < closestMismatch.size())
+					closestMismatch = std::format("{}:{}", donor.m_Setup->m_UUID, mismatch);
+
+				continue;
+			}
 
 			if (!best || shared.size() > bestShared)
 			{
@@ -895,13 +942,12 @@ void ModCoreEvents::TrackApexSetups(const HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRefObj
 
 		const auto total = recipient.m_Components.size();
 
-		if (!best || total == 0 || bestShared * 100 < total * ApexMinSharedPercent)
+		if (!best)
 		{
 			if (!recipient.m_Reported)
 			{
 				recipient.m_Reported = true;
-				spdlog::info("[apex] {}: no matching donor yet (best {} shares {}/{} components)", recipient.m_UUID,
-					best ? best->m_Setup->m_UUID : HRZ2::GGUUID {}, bestShared, total);
+				spdlog::info("[apex] {}: no matching donor yet (closest {})", recipient.m_UUID, closestMismatch);
 			}
 
 			continue;
