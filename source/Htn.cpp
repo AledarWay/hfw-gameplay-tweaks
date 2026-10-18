@@ -76,7 +76,6 @@ namespace Htn
 			MarkMount,
 			FailIfMount,
 			PassIfMount,
-			FailWhileTesting,
 		};
 
 		constexpr size_t MaxConditionalCells = 16;
@@ -85,8 +84,6 @@ namespace Htn
 		thread_local void *g_MountWorldState = nullptr;
 
 		// pass-if-mount forces the condition in windows only, so the mount still picks other attacks in between
-		std::atomic_uint64_t g_MountActsAloneUntil = 0; // "fail-while-testing" cells fail until then
-		std::atomic_uint64_t g_ForceShotUntil = 0;		 // pass-if-mount passes and the shot needs no position until then
 		std::atomic_uint64_t g_PassWindowMs = 6000;
 		std::atomic_uint64_t g_PassCooldownMs = 12000;
 		std::array<std::atomic_uint64_t, MaxConditionalCells> g_PassWindowStart;
@@ -103,12 +100,6 @@ namespace Htn
 					return 0;
 			}
 
-			if constexpr (K == CellKind::FailWhileTesting)
-			{
-				if (GetTickCount64() < g_MountActsAloneUntil.load())
-					return 0;
-			}
-
 			if constexpr (K == CellKind::PassIfMount)
 			{
 				const auto now = GetTickCount64();
@@ -122,7 +113,7 @@ namespace Htn
 					start = now;
 				}
 
-				if (WorldState == g_MountWorldState && (now - start < window || now < g_ForceShotUntil.load()))
+				if (WorldState == g_MountWorldState && now - start < window)
 				{
 					const auto next = *reinterpret_cast<uint64_t **>(reinterpret_cast<uintptr_t>(Frame) + 0x10);
 					return reinterpret_cast<CellFn>(*next)(Planner, WorldState, next, R9);
@@ -141,7 +132,6 @@ namespace Htn
 		const auto MarkMountCells = MakeCellTable<CellKind::MarkMount>(std::make_index_sequence<MaxConditionalCells>());
 		const auto FailIfMountCells = MakeCellTable<CellKind::FailIfMount>(std::make_index_sequence<MaxConditionalCells>());
 		const auto PassIfMountCells = MakeCellTable<CellKind::PassIfMount>(std::make_index_sequence<MaxConditionalCells>());
-		const auto FailWhileTestingCells = MakeCellTable<CellKind::FailWhileTesting>(std::make_index_sequence<MaxConditionalCells>());
 
 		uintptr_t g_Base = 0;
 		std::atomic_bool g_Installed = false;
@@ -272,8 +262,7 @@ namespace Htn
 
 			if (P.m_Enabled && !P.m_Applied)
 			{
-				const bool conditional = P.m_Value == "mark-mount" || P.m_Value == "fail-if-mount" || P.m_Value == "pass-if-mount" ||
-										 P.m_Value == "fail-while-testing";
+				const bool conditional = P.m_Value == "mark-mount" || P.m_Value == "fail-if-mount" || P.m_Value == "pass-if-mount";
 				std::optional<uint64_t> value;
 
 				if (!SafeCopy(&P.m_Original, address, sizeof(uint64_t)))
@@ -296,10 +285,7 @@ namespace Htn
 					}
 
 					g_CellOriginals[P.m_Slot] = P.m_Original;
-					const auto& table = P.m_Value == "mark-mount"		? MarkMountCells
-									 : P.m_Value == "fail-if-mount" ? FailIfMountCells
-									 : P.m_Value == "pass-if-mount" ? PassIfMountCells
-																	: FailWhileTestingCells;
+					const auto& table = P.m_Value == "mark-mount" ? MarkMountCells : P.m_Value == "fail-if-mount" ? FailIfMountCells : PassIfMountCells;
 					value = reinterpret_cast<uint64_t>(table[P.m_Slot]);
 				}
 				else
@@ -639,42 +625,6 @@ namespace Htn
 			spdlog::info("[htn] {} agent {:#x}: {}", Domains[Domain].m_Name, WorldState, summary);
 		}
 
-		// Sunwing shoot_from_distance only fires once (at_shoot_from_distance_position) holds, which needs the mount to
-		// fly there first. While forcing a shot the check reads "player" instead, a predicate every agent has.
-		constexpr uint32_t ShotPositionCell = 0x553C0;
-		constexpr uint64_t ShotPositionPredicate = 301; // at_shoot_from_distance_position
-		constexpr uint64_t AlwaysTruePredicate = 12;	// player
-		bool g_ShotPatched = false;
-
-		void UpdateForcedShotLocked()
-		{
-			const auto pool = g_States[0].m_Pool.load();
-
-			if (!pool)
-				return;
-
-			const auto cell = reinterpret_cast<uint64_t *>(pool + ShotPositionCell);
-			const bool want = GetTickCount64() < g_ForceShotUntil.load();
-
-			if (want && !g_ShotPatched)
-			{
-				uint64_t value = 0;
-
-				if (!SafeCopy(&value, cell, sizeof(value)) || value != ShotPositionPredicate)
-					return;
-
-				SafeCopy(cell, &AlwaysTruePredicate, sizeof(uint64_t));
-				g_ShotPatched = true;
-				spdlog::info("[htn] forced shot: position check skipped");
-			}
-			else if (!want && g_ShotPatched)
-			{
-				SafeCopy(cell, &ShotPositionPredicate, sizeof(uint64_t));
-				g_ShotPatched = false;
-				spdlog::info("[htn] forced shot: position check restored");
-			}
-		}
-
 		template<size_t D>
 		uint64_t HookBehave(void *Planner, void *WorldState, void *Frame, void *R9)
 		{
@@ -687,9 +637,6 @@ namespace Htn
 
 				if (GetTickCount64() < g_DumpUntil.load() && g_Dumped.insert(ws).second)
 					dump = true;
-
-				if constexpr (D == 0)
-					UpdateForcedShotLocked();
 			}
 
 			if (dump)
@@ -795,6 +742,7 @@ namespace Htn
 				{ "sunwing", 0x497A0, "pass-if-mount", c.FlyingRangedAttack, "Sunwing mount: allow the flying plasma barrage" },
 
 				{ "waterwing", 0xAFE0, "mark-mount", true, "Waterwing: detect the called mount" },
+				{ "waterwing", 0x2E5A0, "fail", c.SkipIdleInAir, "Waterwing: in the air, skip go_to_hacker/glide_patrol" },
 				{ "waterwing", 0x21A48, "fail", c.SkipIdleInAir, "Waterwing: in the air, skip wait_hacked (continue)" },
 				{ "waterwing", 0x21A68, "fail", c.SkipIdleInAir, "Waterwing: in the air, skip wait_hacked (begin)" },
 				{ "waterwing", 0x22200, "fail", c.SkipIdleLanded, "Waterwing: landed, skip wait_hacked (continue)" },
@@ -822,25 +770,6 @@ namespace Htn
 				p.m_Label = preset.m_Label;
 				g_Patches.emplace_back(std::move(p));
 			}
-		}
-
-		// While ridden the mount only runs do_mounted (wait). Failing it for a moment lets the planner pick what an
-		// unridden mount would do, e.g. attack, to see how the game handles that with a rider.
-		constexpr std::pair<const char *, uint32_t> mountedCells[] = {
-			{ "sunwing", 0x2980 },
-			{ "sunwing", 0x29A0 },
-			{ "waterwing", 0x26D0 },
-			{ "waterwing", 0x26F0 },
-		};
-
-		for (const auto& [domain, offset] : mountedCells)
-		{
-			Patch p;
-			p.m_Domain = domain;
-			p.m_Offset = offset;
-			p.m_Value = "fail-while-testing";
-			p.m_Label = std::format("{}: test hook for do_mounted (+{:#x})", domain, offset);
-			g_Patches.emplace_back(std::move(p));
 		}
 	}
 
@@ -907,27 +836,6 @@ namespace Htn
 			if (p.m_Domain == Domains[d].m_Name && g_States[d].m_Pool)
 				ApplyPatchLocked(p, d, g_States[d].m_Pool);
 		}
-	}
-
-	void RequestMountActsAlone(uint32_t Milliseconds)
-	{
-		g_MountActsAloneUntil = GetTickCount64() + Milliseconds;
-		spdlog::info("[htn] ridden mount acts on its own for {} ms", Milliseconds);
-	}
-
-	void RequestForcedShot(uint32_t Milliseconds)
-	{
-		const auto until = GetTickCount64() + Milliseconds;
-		g_ForceShotUntil = until;
-		g_MountActsAloneUntil = until;
-		spdlog::info("[htn] forcing a Sunwing plasma barrage for {} ms", Milliseconds);
-	}
-
-	uint32_t GetMountActsAloneRemaining()
-	{
-		const auto now = GetTickCount64();
-		const auto until = g_MountActsAloneUntil.load();
-		return until > now ? static_cast<uint32_t>(until - now) : 0;
 	}
 
 	void RequestDecisionTrace(uint32_t Milliseconds)
