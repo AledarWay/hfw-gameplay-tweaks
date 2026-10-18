@@ -36,6 +36,23 @@ HRZ2::RTTIObjectTweaker::SetValueVisitor::EMode ModCoreEvents::ValuePatchVisitor
 ModCoreEvents::ModCoreEvents()
 {
 	// Comma-separated, case-insensitive substrings of RTTI type names or object UUIDs
+	for (const auto& c : ModConfiguration.ComponentInjects)
+	{
+		if (!c.Enabled)
+			continue;
+
+		auto target = HRZ2::GGUUID::TryParse(c.Target);
+		auto component = HRZ2::GGUUID::TryParse(c.Component);
+
+		if (!target || !component || c.Field.empty())
+		{
+			spdlog::error("Invalid [[ComponentInject]] entry: Target '{}', Field '{}', Component '{}'", c.Target, c.Field, c.Component);
+			continue;
+		}
+
+		m_ComponentInjects.emplace_back(ComponentInject { *target, c.Field, *component });
+	}
+
 	for (const auto& part : ModConfiguration.AssetDumpTypes | std::views::split(','))
 	{
 		std::string filter { std::string_view(part) };
@@ -549,6 +566,12 @@ void ModCoreEvents::OnBeforeUnloadGroup(const HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRe
 	if (ModConfiguration.EnableAssetLogging)
 		spdlog::info("OnBeforeUnloadGroup");
 
+	if (!m_ComponentInjects.empty())
+	{
+		std::scoped_lock lock(m_InjectMutex);
+		TrackInjectObjectsLocked(Objects, false);
+	}
+
 	for (auto& object : Objects)
 	{
 		const auto rtti = object->GetRTTI();
@@ -624,6 +647,101 @@ void ModCoreEvents::OnLoadAssetGroup(const HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRefOb
 
 		if (auto itr = m_RTTIPatchesByUUID.find(object->m_UUID); itr != m_RTTIPatchesByUUID.end())
 			visitAll(itr->second);
+	}
+
+	if (!m_ComponentInjects.empty())
+	{
+		std::scoped_lock lock(m_InjectMutex);
+		TrackInjectObjectsLocked(Objects, true);
+		ApplyComponentInjectsLocked();
+	}
+}
+
+void ModCoreEvents::TrackInjectObjectsLocked(const HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRefObject>>& Objects, bool Loaded)
+{
+	for (size_t o = 0; o < Objects.size(); o++)
+	{
+		auto& object = Objects[o];
+
+		if (!object.GetPtr())
+			continue;
+
+		const auto uuid = object->m_UUID;
+		const bool used = std::ranges::any_of(m_ComponentInjects, [&](const auto& c) { return c.m_Target == uuid || c.m_Component == uuid; });
+
+		if (!used)
+			continue;
+
+		if (Loaded)
+		{
+			m_InjectObjects[uuid] = object.GetPtr();
+			continue;
+		}
+
+		// A component about to go away: take it back out of targets that are still loaded
+		for (const auto& c : m_ComponentInjects)
+		{
+			if (c.m_Component != uuid)
+				continue;
+
+			auto target = m_InjectObjects.find(c.m_Target);
+
+			if (target == m_InjectObjects.end())
+				continue;
+
+			try
+			{
+				auto& array = target->second->GetMemberRefUnsafe<HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRefObject>>>(c.m_Field.c_str());
+
+				for (size_t i = 0; i < array.size(); i++)
+				{
+					if (array[i].GetPtr() == object.GetPtr())
+					{
+						array[i] = array[array.size() - 1];
+						array.pop_back();
+						spdlog::info("[inject] removed {} from {}.{} (unloading)", uuid, c.m_Target, c.m_Field);
+						break;
+					}
+				}
+			}
+			catch (const std::exception&)
+			{
+			}
+		}
+
+		m_InjectObjects.erase(uuid);
+	}
+}
+
+void ModCoreEvents::ApplyComponentInjectsLocked()
+{
+	for (const auto& c : m_ComponentInjects)
+	{
+		auto target = m_InjectObjects.find(c.m_Target);
+		auto component = m_InjectObjects.find(c.m_Component);
+
+		if (target == m_InjectObjects.end() || component == m_InjectObjects.end())
+			continue;
+
+		try
+		{
+			auto& array = target->second->GetMemberRefUnsafe<HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRefObject>>>(c.m_Field.c_str());
+
+			bool present = false;
+
+			for (size_t i = 0; i < array.size(); i++)
+				present |= array[i].GetPtr() == component->second;
+
+			if (present)
+				continue;
+
+			array.push_back(HRZ2::Ref<HRZ2::RTTIRefObject>(component->second));
+			spdlog::info("[inject] added {} to {}.{} ({} entries)", c.m_Component, c.m_Target, c.m_Field, array.size());
+		}
+		catch (const std::exception& e)
+		{
+			spdlog::error("[inject] {}.{}: {}", c.m_Target, c.m_Field, e.what());
+		}
 	}
 }
 

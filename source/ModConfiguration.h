@@ -32,6 +32,14 @@ namespace InternalModConfig
 		std::string Value;
 	};
 
+	struct ComponentInject
+	{
+		bool Enabled = true;
+		std::string Target;	   // UUID of the object whose array receives the component (e.g. an EntityComponentSetResource)
+		std::string Field;	   // Array member of the target, e.g. "ComponentResources"
+		std::string Component; // UUID of the component resource to add
+	};
+
 	struct SlotProbe
 	{
 		bool Enabled = true;
@@ -131,6 +139,9 @@ namespace InternalModConfig
 
 		// [[SlotProbe]]
 		std::vector<SlotProbe> SlotProbes;
+
+		// [[ComponentInject]]
+		std::vector<ComponentInject> ComponentInjects;
 
 		// [Supercells]
 		bool SupercellIncludeAllLocations;

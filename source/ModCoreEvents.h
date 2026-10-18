@@ -48,6 +48,21 @@ private:
 	std::optional<HRZ2::GGUUID> m_CharacterOverrideRootUUID;
 	std::optional<HRZ2::GGUUID> m_CharacterOverrideVariantUUID;
 
+	// Component injection: add a loaded component resource to another loaded object's array
+	struct ComponentInject
+	{
+		HRZ2::GGUUID m_Target;
+		std::string m_Field;
+		HRZ2::GGUUID m_Component;
+	};
+
+	std::vector<ComponentInject> m_ComponentInjects;
+	std::unordered_map<HRZ2::GGUUID, HRZ2::RTTIRefObject *> m_InjectObjects;
+	std::mutex m_InjectMutex;
+
+	void TrackInjectObjectsLocked(const HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRefObject>>& Objects, bool Loaded);
+	void ApplyComponentInjectsLocked();
+
 	// Asset dumping
 	std::vector<std::string> m_AssetDumpFilters;
 	std::mutex m_AssetDumpMutex;
