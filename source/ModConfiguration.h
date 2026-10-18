@@ -102,6 +102,8 @@ namespace InternalModConfig
 			bool NoLandingNextToTarget;
 			bool FlyingRangedAttack;
 			bool NoEvadeInWater;
+			double OutOfWaterDelay;
+			double LookAtThreatSeconds;
 			double RangedAttackWindow;
 			double RangedAttackCooldown;
 		} FlyingMountAI;

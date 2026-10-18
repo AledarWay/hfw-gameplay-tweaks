@@ -23,11 +23,12 @@ namespace Htn
 		bool m_Enabled = true;
 		std::string m_Domain;
 		uint32_t m_Offset = 0; // Byte offset in the pool
-		std::string m_Value;   // Number, "pred:<name>", "sym:<name>", "fail", "mark-mount", "fail-if-mount", "pass-if-mount", "mark-mount-in-water" or "fail-if-mount-in-water"
+		std::string m_Value;   // Number, "pred:<name>", "sym:<name>", "fail", "mark-mount", "fail-if-mount", "pass-if-mount", "mark-mount-in-water", "fail-if-mount-in-water", "delay-if-mount" or "double:<x>"
 		std::string m_Label;   // Shown in the menu, empty for [[HTNPatch]] entries
 		bool m_Applied = false;
 		uint64_t m_Original = 0;
 		int m_Slot = -1; // Conditional cell slot
+		uint64_t m_Expected = 0; // When set, the patch applies only over this original value
 		std::string m_Error;
 	};
 

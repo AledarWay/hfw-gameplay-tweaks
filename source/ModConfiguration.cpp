@@ -200,6 +200,8 @@ namespace InternalModConfig
 			f.NoLandingNextToTarget = get("NoLandingNextToTarget", true);
 			f.FlyingRangedAttack = get("FlyingRangedAttack", true);
 			f.NoEvadeInWater = get("NoEvadeInWater", true);
+			f.OutOfWaterDelay = get("OutOfWaterDelay", 3.0);
+			f.LookAtThreatSeconds = get("LookAtThreatSeconds", 3.0);
 			f.RangedAttackWindow = get("RangedAttackWindow", 6.0);
 			f.RangedAttackCooldown = get("RangedAttackCooldown", 12.0);
 		}

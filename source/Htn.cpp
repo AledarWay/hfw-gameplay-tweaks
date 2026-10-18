@@ -1,6 +1,7 @@
 #include <Windows.h>
 #include <detours/detours.h>
 #include <array>
+#include <bit>
 #include <string_view>
 #include <algorithm>
 #include <atomic>
@@ -78,6 +79,7 @@ namespace Htn
 			PassIfMount,
 			MarkMountInWater,
 			FailIfMountInWater,
+			DelayIfMount,
 		};
 
 		constexpr size_t MaxConditionalCells = 16;
@@ -90,6 +92,12 @@ namespace Htn
 		std::atomic_uint64_t g_PassWindowMs = 6000;
 		std::atomic_uint64_t g_PassCooldownMs = 12000;
 		std::array<std::atomic_uint64_t, MaxConditionalCells> g_PassWindowStart;
+
+		// delay-if-mount fails until the cell has been reached continuously for this long
+		std::atomic_uint64_t g_DelayMs = 3000;
+		constexpr uint64_t DelayStreakGapMs = 1000;
+		std::array<std::atomic_uint64_t, MaxConditionalCells> g_DelayFirst;
+		std::array<std::atomic_uint64_t, MaxConditionalCells> g_DelayLast;
 
 		template<CellKind K, size_t N>
 		uint64_t ConditionalCell(void *Planner, void *WorldState, void *Frame, void *R9)
@@ -104,6 +112,22 @@ namespace Htn
 			{
 				if (WorldState == g_MountWorldState && g_MountInWater)
 					return 0;
+			}
+
+			if constexpr (K == CellKind::DelayIfMount)
+			{
+				if (WorldState == g_MountWorldState)
+				{
+					const auto now = GetTickCount64();
+
+					if (now - g_DelayLast[N].load() > DelayStreakGapMs)
+						g_DelayFirst[N] = now;
+
+					g_DelayLast[N] = now;
+
+					if (now - g_DelayFirst[N].load() < g_DelayMs.load())
+						return 0;
+				}
 			}
 
 			if constexpr (K == CellKind::MarkMountInWater)
@@ -153,6 +177,7 @@ namespace Htn
 		const auto PassIfMountCells = MakeCellTable<CellKind::PassIfMount>(std::make_index_sequence<MaxConditionalCells>());
 		const auto MarkMountInWaterCells = MakeCellTable<CellKind::MarkMountInWater>(std::make_index_sequence<MaxConditionalCells>());
 		const auto FailIfMountInWaterCells = MakeCellTable<CellKind::FailIfMountInWater>(std::make_index_sequence<MaxConditionalCells>());
+		const auto DelayIfMountCells = MakeCellTable<CellKind::DelayIfMount>(std::make_index_sequence<MaxConditionalCells>());
 
 		uintptr_t g_Base = 0;
 		std::atomic_bool g_Installed = false;
@@ -254,6 +279,16 @@ namespace Htn
 				return std::nullopt;
 			}
 
+			if (Text.starts_with("double:"))
+			{
+				double value = 0.0;
+
+				if (std::from_chars(Text.data() + 7, Text.data() + Text.size(), value).ec != std::errc())
+					return std::nullopt;
+
+				return std::bit_cast<uint64_t>(value);
+			}
+
 			if (Text == "fail")
 				return reinterpret_cast<uint64_t>(&FailCell);
 
@@ -284,12 +319,19 @@ namespace Htn
 			if (P.m_Enabled && !P.m_Applied)
 			{
 				const bool conditional = P.m_Value == "mark-mount" || P.m_Value == "fail-if-mount" || P.m_Value == "pass-if-mount" ||
-										 P.m_Value == "mark-mount-in-water" || P.m_Value == "fail-if-mount-in-water";
+										 P.m_Value == "mark-mount-in-water" || P.m_Value == "fail-if-mount-in-water" ||
+										 P.m_Value == "delay-if-mount";
 				std::optional<uint64_t> value;
 
 				if (!SafeCopy(&P.m_Original, address, sizeof(uint64_t)))
 				{
 					P.m_Error = "pool not readable";
+					return;
+				}
+
+				if (P.m_Expected && P.m_Original != P.m_Expected)
+				{
+					P.m_Error = std::format("unexpected original {:#x}", P.m_Original);
 					return;
 				}
 
@@ -311,7 +353,8 @@ namespace Htn
 									 : P.m_Value == "fail-if-mount" ? FailIfMountCells
 									 : P.m_Value == "pass-if-mount" ? PassIfMountCells
 									 : P.m_Value == "mark-mount-in-water" ? MarkMountInWaterCells
-																		  : FailIfMountInWaterCells;
+									 : P.m_Value == "fail-if-mount-in-water" ? FailIfMountInWaterCells
+																			 : DelayIfMountCells;
 					value = reinterpret_cast<uint64_t>(table[P.m_Slot]);
 				}
 				else
@@ -745,6 +788,8 @@ namespace Htn
 
 			g_PassWindowMs = static_cast<uint64_t>(std::max(c.RangedAttackWindow, 0.0) * 1000.0);
 			g_PassCooldownMs = static_cast<uint64_t>(std::max(c.RangedAttackCooldown, 0.0) * 1000.0);
+			g_DelayMs = static_cast<uint64_t>(std::max(c.OutOfWaterDelay, 0.0) * 1000.0);
+			const auto lookAtThreat = std::format("double:{}", c.LookAtThreatSeconds);
 
 			struct Preset
 			{
@@ -766,6 +811,7 @@ namespace Htn
 				{ "sunwing", 0x194F0, "fail", c.SkipWholeLandedBranch, "Sunwing: landed, skip the whole mount branch" },
 				{ "sunwing", 0x49E48, "fail-if-mount", c.NoLandingNextToTarget, "Sunwing mount: don't land next to the target" },
 				{ "sunwing", 0x497A0, "pass-if-mount", c.FlyingRangedAttack, "Sunwing mount: allow the flying plasma barrage" },
+				{ "sunwing", 0x4A0B0, lookAtThreat.c_str(), c.LookAtThreatSeconds > 0.0, "Sunwing: shorter look_at_threat (all Sunwings)" },
 
 				{ "waterwing", 0xAFE0, "mark-mount", true, "Waterwing: detect the called mount" },
 				{ "waterwing", 0x14CA0, "mark-mount-in-water", true, "Waterwing: detect the called mount in water" },
@@ -786,6 +832,8 @@ namespace Htn
 				{ "waterwing", 0x5E880, "fail-if-mount-in-water", c.NoEvadeInWater, "Waterwing mount: no air dodge in water (begin)" },
 				{ "waterwing", 0x587D0, "fail-if-mount-in-water", c.NoEvadeInWater, "Waterwing mount: no air dodge in water (continue 2)" },
 				{ "waterwing", 0x58950, "fail-if-mount-in-water", c.NoEvadeInWater, "Waterwing mount: no air dodge in water (begin 2)" },
+				{ "waterwing", 0x21458, "delay-if-mount", c.OutOfWaterDelay > 0.0, "Waterwing mount: wait before following the player out of water" },
+				{ "waterwing", 0x59BE0, lookAtThreat.c_str(), c.LookAtThreatSeconds > 0.0, "Waterwing: shorter look_at_threat (all Waterwings)" },
 			};
 
 			for (const auto& preset : presets)
@@ -801,6 +849,10 @@ namespace Htn
 				p.m_Offset = preset.m_Offset;
 				p.m_Value = preset.m_Value;
 				p.m_Label = preset.m_Label;
+
+				if (p.m_Value.starts_with("double:"))
+					p.m_Expected = std::bit_cast<uint64_t>(10.0); // look_at_threat run_for_min in both domains
+
 				g_Patches.emplace_back(std::move(p));
 			}
 		}
