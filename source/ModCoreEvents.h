@@ -92,12 +92,15 @@ private:
 		HRZ2::RTTIRefObject *m_Entity = nullptr;
 		HRZ2::RTTIRefObject *m_Injected = nullptr;
 		HRZ2::GGUUID m_UUID;
+		std::vector<HRZ2::RTTIRefObject *> m_Components; // Sorted, without the Apex set
+		bool m_Reported = false;
 	};
 
 	struct ApexDonor
 	{
 		HRZ2::RTTIRefObject *m_Setup = nullptr;
 		HRZ2::RTTIRefObject *m_Hackable = nullptr;
+		std::vector<HRZ2::RTTIRefObject *> m_Components; // Sorted, without the hackable component
 	};
 
 	std::unordered_map<HRZ2::RTTIRefObject *, ApexRecipient> m_ApexRecipients;

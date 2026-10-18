@@ -1,5 +1,6 @@
 #include <Windows.h>
 #include <algorithm>
+#include <iterator>
 #include <cctype>
 #include <cstdio>
 #include <format>
@@ -697,6 +698,8 @@ const std::string& ModCoreEvents::InjectTypeName(const HRZ2::RTTIRefObject *Obje
 	return name->second;
 }
 
+constexpr size_t ApexMinSharedPercent = 90;
+
 void ModCoreEvents::TrackApexSetups(const HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRefObject>>& Objects, bool Loaded)
 {
 	using ComponentArray = HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRefObject>>;
@@ -811,6 +814,7 @@ void ModCoreEvents::TrackApexSetups(const HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRefObj
 
 			HRZ2::RTTIRefObject *hackable = nullptr;
 			bool apex = false;
+			std::vector<HRZ2::RTTIRefObject *> list;
 
 			for (size_t i = 0; i < array->size(); i++)
 			{
@@ -820,26 +824,36 @@ void ModCoreEvents::TrackApexSetups(const HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRefObj
 					continue;
 
 				const auto& type = InjectTypeName(component);
+				bool apexSet = false;
 
 				if (type == "HackableComponentResource")
 				{
 					hackable = component;
+					continue;
 				}
-				else if (type == "EntityComponentSetResource" && !apex)
+
+				if (type == "EntityComponentSetResource")
 				{
 					// The Apex variant adds a set with a dealt damage multiplier
 					if (auto set = components(component))
 					{
-						for (size_t j = 0; j < set->size() && !apex; j++)
-							apex = (*set)[j].GetPtr() && InjectTypeName((*set)[j].GetPtr()) == "DamageDealtModifierComponentResource";
+						for (size_t j = 0; j < set->size() && !apexSet; j++)
+							apexSet = (*set)[j].GetPtr() && InjectTypeName((*set)[j].GetPtr()) == "DamageDealtModifierComponentResource";
 					}
 				}
+
+				apex |= apexSet;
+
+				if (!apexSet)
+					list.push_back(component);
 			}
 
+			std::ranges::sort(list);
+
 			if (hackable)
-				m_ApexDonors[entity].emplace_back(ApexDonor { object.GetPtr(), hackable });
+				m_ApexDonors[entity].emplace_back(ApexDonor { object.GetPtr(), hackable, std::move(list) });
 			else if (apex || ModConfiguration.ApexOverrideAllVariants)
-				m_ApexRecipients[object.GetPtr()] = ApexRecipient { entity, nullptr, object->m_UUID };
+				m_ApexRecipients[object.GetPtr()] = ApexRecipient { entity, nullptr, object->m_UUID, std::move(list) };
 		}
 	}
 
@@ -859,11 +873,43 @@ void ModCoreEvents::TrackApexSetups(const HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRefObj
 		if (!array)
 			continue;
 
-		auto hackable = donors->second.front().m_Hackable;
+		// Several variants share one entity resource (e.g. elemental ones), each with its own hackable component and
+		// mounted weapons. Take the donor that has the most of the recipient's other components.
+		const ApexDonor *best = nullptr;
+		size_t bestShared = 0;
+
+		for (const auto& donor : donors->second)
+		{
+			std::vector<HRZ2::RTTIRefObject *> shared;
+			std::ranges::set_intersection(recipient.m_Components, donor.m_Components, std::back_inserter(shared));
+
+			if (!best || shared.size() > bestShared)
+			{
+				best = &donor;
+				bestShared = shared.size();
+			}
+		}
+
+		const auto total = recipient.m_Components.size();
+
+		if (!best || total == 0 || bestShared * 100 < total * ApexMinSharedPercent)
+		{
+			if (!recipient.m_Reported)
+			{
+				recipient.m_Reported = true;
+				spdlog::info("[apex] {}: no matching donor yet (best {} shares {}/{} components)", recipient.m_UUID,
+					best ? best->m_Setup->m_UUID : HRZ2::GGUUID {}, bestShared, total);
+			}
+
+			continue;
+		}
+
+		auto hackable = best->m_Hackable;
 		array->push_back(HRZ2::Ref<HRZ2::RTTIRefObject>(hackable));
 		recipient.m_Injected = hackable;
 
-		spdlog::info("[apex] {} can now be overridden (component {} from {})", recipient.m_UUID, hackable->m_UUID, donors->second.front().m_Setup->m_UUID);
+		spdlog::info("[apex] {} can now be overridden (component {} from {}, {}/{} components shared)", recipient.m_UUID, hackable->m_UUID,
+			best->m_Setup->m_UUID, bestShared, total);
 	}
 }
 
