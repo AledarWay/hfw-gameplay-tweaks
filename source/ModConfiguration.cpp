@@ -123,6 +123,7 @@ namespace InternalModConfig
 			PARSE_TOML_MEMBER(general, DebugMenuFontScale);
 			PARSE_TOML_MEMBER(general, AssetDumpTypes);
 			PARSE_TOML_MEMBER(general, AssetDumpDepth);
+			PARSE_TOML_MEMBER(general, AssetFindReferences);
 			PARSE_TOML_MEMBER(general, GraphScanKeywords);
 
 			// Older configs had this under [General]

@@ -79,6 +79,14 @@ private:
 	std::vector<std::string> m_AssetDumpFilters;
 	std::mutex m_AssetDumpMutex;
 
+	// Reference finder (research)
+	std::unordered_set<HRZ2::GGUUID> m_RefFindUUIDs;
+	std::unordered_map<uintptr_t, HRZ2::GGUUID> m_RefFindObjects;
+	std::unordered_set<std::string> m_RefFindLogged;
+	std::mutex m_RefFindMutex;
+
+	void FindReferences(const HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRefObject>>& Objects, bool Loaded);
+
 public:
 	HRZ2::SharedMutex m_CachedDataMutex;
 	std::unordered_set<HRZ2::RTTIRefObject *> m_CachedAIFactions;

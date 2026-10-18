@@ -76,6 +76,7 @@ namespace InternalModConfig
 		float DebugMenuFontScale;
 		std::string AssetDumpTypes;
 		int AssetDumpDepth;
+		std::string AssetFindReferences;
 		std::string GraphScanKeywords;
 
 		// [Gameplay]

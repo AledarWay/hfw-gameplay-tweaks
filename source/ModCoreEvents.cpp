@@ -1,3 +1,4 @@
+#include <Windows.h>
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
@@ -51,6 +52,17 @@ ModCoreEvents::ModCoreEvents()
 		else
 			spdlog::error("Invalid [[ComponentInject]] entry: Target '{}', TargetType '{}', TargetContains '{}', Field '{}', Component '{}'",
 				c.Target, c.TargetType, c.TargetContains, c.Field, c.Component);
+	}
+
+	for (const auto& part : ModConfiguration.AssetFindReferences | std::views::split(','))
+	{
+		std::string text { std::string_view(part) };
+		std::erase_if(text, [](unsigned char c) { return std::isspace(c); });
+
+		if (auto uuid = HRZ2::GGUUID::TryParse(text))
+			m_RefFindUUIDs.emplace(*uuid);
+		else if (!text.empty())
+			spdlog::error("Invalid AssetFindReferences UUID '{}'", text);
 	}
 
 	// Comma-separated, case-insensitive substrings of RTTI type names or object UUIDs
@@ -573,6 +585,9 @@ void ModCoreEvents::OnBeforeUnloadGroup(const HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRe
 		TrackInjectObjectsLocked(Objects, false);
 	}
 
+	if (!m_RefFindUUIDs.empty())
+		FindReferences(Objects, false);
+
 	for (auto& object : Objects)
 	{
 		const auto rtti = object->GetRTTI();
@@ -655,6 +670,123 @@ void ModCoreEvents::OnLoadAssetGroup(const HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRefOb
 		std::scoped_lock lock(m_InjectMutex);
 		TrackInjectObjectsLocked(Objects, true);
 		ApplyComponentInjectsLocked();
+	}
+
+	if (!m_RefFindUUIDs.empty())
+		FindReferences(Objects, true);
+}
+
+static bool SafeReadQword(const void *Address, uint64_t& Value)
+{
+	__try
+	{
+		Value = *static_cast<const volatile uint64_t *>(Address);
+		return true;
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER)
+	{
+		return false;
+	}
+}
+
+void ModCoreEvents::FindReferences(const HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRefObject>>& Objects, bool Loaded)
+{
+	std::scoped_lock lock(m_RefFindMutex);
+
+	for (auto& object : Objects)
+	{
+		if (!object.GetPtr() || !m_RefFindUUIDs.contains(object->m_UUID))
+			continue;
+
+		if (Loaded)
+			m_RefFindObjects[reinterpret_cast<uintptr_t>(object.GetPtr())] = object->m_UUID;
+		else
+			m_RefFindObjects.erase(reinterpret_cast<uintptr_t>(object.GetPtr()));
+	}
+
+	if (!Loaded || m_RefFindObjects.empty())
+		return;
+
+	auto memberAt = [](HRZ2::RTTIRefObject *Object, const HRZ2::RTTICompound *Type, size_t Offset)
+	{
+		std::string name = "?";
+		size_t best = 0;
+
+		Type->VisitClassMembersByInheritance(Object, [&](const HRZ2::RTTICompound::Attr& Member, void *MemberObject)
+		{
+			const auto offset = static_cast<size_t>(static_cast<char *>(MemberObject) - reinterpret_cast<char *>(Object));
+
+			if (offset <= Offset && offset >= best)
+			{
+				best = offset;
+				name = Member.m_Name;
+			}
+
+			return false;
+		});
+
+		return std::format("{}+0x{:X}", name, Offset - best);
+	};
+
+	auto report = [&](HRZ2::RTTIRefObject *Object, const HRZ2::RTTICompound *Type, size_t Offset, int Index, const HRZ2::GGUUID& Target)
+	{
+		auto key = std::format("{}/{}", Object->m_UUID, Target);
+
+		if (!m_RefFindLogged.insert(key).second)
+			return;
+
+		auto where = memberAt(Object, Type, Offset);
+
+		if (Index >= 0)
+			where += std::format("[{}]", Index);
+
+		spdlog::info("[refs] {} {} {} -> {}", Type->GetSymbolName(), Object->m_UUID, where, Target);
+	};
+
+	for (auto& object : Objects)
+	{
+		if (!object.GetPtr())
+			continue;
+
+		const auto type = object->GetRTTI()->AsCompound();
+
+		if (!type)
+			continue;
+
+		const auto base = reinterpret_cast<const uint8_t *>(object.GetPtr());
+
+		for (size_t offset = 8; offset + 8 <= type->m_Size; offset += 8)
+		{
+			uint64_t value = 0;
+
+			if (!SafeReadQword(base + offset, value))
+				break;
+
+			if (auto itr = m_RefFindObjects.find(value); itr != m_RefFindObjects.end())
+			{
+				report(object.GetPtr(), type, offset, -1, itr->second);
+				continue;
+			}
+
+			// Array<T>: int32 length, int32 capacity, T *data
+			const auto length = static_cast<int32_t>(value & 0xFFFFFFFF);
+			const auto capacity = static_cast<int32_t>(value >> 32);
+			uint64_t data = 0;
+
+			if (length <= 0 || length > capacity || capacity > 65536 || offset + 16 > type->m_Size || !SafeReadQword(base + offset + 8, data) || data < 0x10000)
+				continue;
+
+			for (int32_t i = 0; i < length; i++)
+			{
+				uint64_t element = 0;
+
+				if (!SafeReadQword(reinterpret_cast<const void *>(data + i * 8), element))
+					break;
+
+				if (auto itr = m_RefFindObjects.find(element); itr != m_RefFindObjects.end())
+					report(object.GetPtr(), type, offset, i, itr->second);
+			}
+		}
 	}
 }
 
