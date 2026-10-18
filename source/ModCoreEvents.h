@@ -92,6 +92,7 @@ private:
 		HRZ2::RTTIRefObject *m_Entity = nullptr;
 		HRZ2::RTTIRefObject *m_Injected = nullptr; // Hackable component
 		std::vector<HRZ2::RTTIRefObject *> m_InjectedAll; // Hackable component and its node graphs
+		std::vector<HRZ2::GGUUID> m_AddedHierarchy;		 // Callable mount spawn setups added to SpawnSetupHierarchy
 		HRZ2::GGUUID m_UUID;
 		std::vector<HRZ2::RTTIRefObject *> m_Components; // Sorted, without the Apex set
 		bool m_Reported = false;
@@ -108,6 +109,7 @@ private:
 	std::unordered_map<HRZ2::RTTIRefObject *, std::vector<ApexDonor>> m_ApexDonors;
 	std::mutex m_ApexMutex;
 	std::unordered_set<HRZ2::GGUUID> m_ApexDebugLogged;
+	std::unordered_set<HRZ2::GGUUID> m_CallableMountSetups;
 
 	void LogApexCandidates(const ApexRecipient& Recipient, const std::vector<ApexDonor>& Donors);
 

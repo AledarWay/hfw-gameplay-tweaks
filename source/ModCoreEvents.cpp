@@ -757,8 +757,30 @@ void ModCoreEvents::TrackApexSetups(const HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRefObj
 			}
 		}
 
+		try
+		{
+			auto& hierarchy = Setup->GetMemberRefUnsafe<HRZ2::Array<HRZ2::GGUUID>>("SpawnSetupHierarchy");
+
+			for (const auto& uuid : Recipient.m_AddedHierarchy)
+			{
+				for (size_t i = 0; i < hierarchy.size(); i++)
+				{
+					if (hierarchy[i] == uuid)
+					{
+						hierarchy[i] = hierarchy[hierarchy.size() - 1];
+						hierarchy.pop_back();
+						break;
+					}
+				}
+			}
+		}
+		catch (const std::exception&)
+		{
+		}
+
 		Recipient.m_Injected = nullptr;
 		Recipient.m_InjectedAll.clear();
+		Recipient.m_AddedHierarchy.clear();
 	};
 
 	if (!Loaded)
@@ -823,20 +845,23 @@ void ModCoreEvents::TrackApexSetups(const HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRefObj
 			if (!object.GetPtr())
 				continue;
 
-			// Research: which spawn setups the mount call components can spawn
-			if (ModConfiguration.ApexOverrideDebug && InjectTypeName(object.GetPtr()).ends_with("CallComponentResource"))
+			// Spawn setups the mount call components can spawn
+			if (const auto& type = InjectTypeName(object.GetPtr()); type == "GroundMountCallComponentResource" || type == "AirMountCallComponentResource")
 			{
 				try
 				{
 					auto& setups = object->GetMemberRefUnsafe<HRZ2::Array<HRZ2::StreamingRef<HRZ2::RTTIRefObject>>>("HorseSpawnSetups");
-					spdlog::info("[apex-debug] {} {}: {} spawn setups", InjectTypeName(object.GetPtr()), object->m_UUID, setups.size());
 
 					for (size_t i = 0; i < setups.size(); i++)
-						spdlog::info("[apex-debug]   [{}] {} {}", i, setups[i].GetUUID(), setups[i].GetPtr() ? "loaded" : "not loaded");
+					{
+						m_CallableMountSetups.insert(setups[i].GetUUID());
+
+						if (ModConfiguration.ApexOverrideDebug)
+							spdlog::info("[apex-debug] {} spawn setup [{}] {}", type, i, setups[i].GetUUID());
+					}
 				}
-				catch (const std::exception& e)
+				catch (const std::exception&)
 				{
-					spdlog::info("[apex-debug] {}: {}", InjectTypeName(object.GetPtr()), e.what());
 				}
 			}
 
@@ -899,7 +924,7 @@ void ModCoreEvents::TrackApexSetups(const HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRefObj
 			if (hackable)
 				m_ApexDonors[entity].emplace_back(ApexDonor { object.GetPtr(), hackable, std::move(list) });
 			else if (apex || ModConfiguration.ApexOverrideAllVariants)
-				m_ApexRecipients[object.GetPtr()] = ApexRecipient { entity, nullptr, {}, object->m_UUID, std::move(list) };
+				m_ApexRecipients[object.GetPtr()] = ApexRecipient { entity, nullptr, {}, {}, object->m_UUID, std::move(list) };
 		}
 	}
 
@@ -1025,6 +1050,41 @@ void ModCoreEvents::TrackApexSetups(const HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRefObj
 			array->push_back(HRZ2::Ref<HRZ2::RTTIRefObject>(object));
 
 		recipient.m_Injected = hackable;
+
+		// Calling the overridden mount spawns the call component's spawn setup that is in the machine's spawn setup
+		// hierarchy. The Apex hierarchy has none of them, so the call falls back to the first one (a Charger or a
+		// Sunwing). Add the ones the donor has, which brings the regular version of the machine when called.
+		try
+		{
+			auto& donorHierarchy = best->m_Setup->GetMemberRefUnsafe<HRZ2::Array<HRZ2::GGUUID>>("SpawnSetupHierarchy");
+			auto& hierarchy = setup->GetMemberRefUnsafe<HRZ2::Array<HRZ2::GGUUID>>("SpawnSetupHierarchy");
+
+			for (size_t i = 0; i < donorHierarchy.size(); i++)
+			{
+				const auto uuid = donorHierarchy[i];
+				bool present = false;
+
+				for (size_t j = 0; j < hierarchy.size(); j++)
+					present |= hierarchy[j] == uuid;
+
+				if (present || !m_CallableMountSetups.contains(uuid))
+					continue;
+
+				hierarchy.push_back(uuid);
+				recipient.m_AddedHierarchy.push_back(uuid);
+				spdlog::info("[apex] {}: callable as {}", recipient.m_UUID, uuid);
+			}
+
+			if (ModConfiguration.ApexOverrideDebug)
+			{
+				for (size_t i = 0; i < donorHierarchy.size(); i++)
+					spdlog::info("[apex-debug] {} donor hierarchy [{}] {}", recipient.m_UUID, i, donorHierarchy[i]);
+			}
+		}
+		catch (const std::exception& e)
+		{
+			spdlog::error("[apex] {}: {}", recipient.m_UUID, e.what());
+		}
 
 		spdlog::info("[apex] {} can now be overridden (component {} + {} node graphs from {}, {}/{} components shared)", recipient.m_UUID,
 			hackable->m_UUID, recipient.m_InjectedAll.size() - 1, best->m_Setup->m_UUID, bestShared, total);
