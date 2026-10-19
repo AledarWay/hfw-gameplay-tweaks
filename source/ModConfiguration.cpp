@@ -501,15 +501,6 @@ namespace InternalModConfig
 			.Value = "Full",
 		});
 
-		// UnlockSpawnAreaRestrictions: spawned AIs are kept inside the navmesh areas of their spawn's area restriction
-		s.AssetOverrides.emplace_back(AssetOverride
-		{
-			.Enabled = s.UnlockSpawnAreaRestrictions,
-			.ObjectTypes = "AreaRestrictionSpawnCommand",
-			.Path = "Areas",
-			.Value = "",
-		});
-
 		// UnlockMountRestrictions
 		s.AssetOverrides.emplace_back(AssetOverride
 		{

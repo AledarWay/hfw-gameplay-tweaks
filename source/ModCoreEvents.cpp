@@ -16,6 +16,7 @@
 #include "ModCoreEvents.h"
 #include "HRZ2/RTTIScanner.h"
 #include "HRZ2/GraphRuntime.h"
+#include "DefendArea.h"
 #include "Htn.h"
 #include "Supercells.h"
 
@@ -577,6 +578,7 @@ void ModCoreEvents::OnFinishLoadGroup(const HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRefO
 	HRZ2::GraphRuntime::TryInstall();
 	Supercells::TryInstall();
 	Htn::TryInstall();
+	DefendArea::TryInstall();
 }
 
 void ModCoreEvents::OnBeforeUnloadGroup(const HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRefObject>>& Objects)
