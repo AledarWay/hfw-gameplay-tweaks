@@ -577,6 +577,14 @@ void ModCoreEvents::OnFinishLoadGroup(const HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRefO
 	HRZ2::GraphRuntime::TryInstall();
 	Supercells::TryInstall();
 	Htn::TryInstall();
+
+	if (ModConfiguration.ApexCallAsApex)
+	{
+		std::scoped_lock lock(m_ApexMutex);
+
+		if (!m_ApexPendingCalls.empty() || !m_ApexPendingKeepLoaded.empty())
+			HRZ2::JobHeaderCPU::SubmitCallback([]() { GetInstance().ProcessApexPendingStreaming(); });
+	}
 }
 
 void ModCoreEvents::OnBeforeUnloadGroup(const HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRefObject>>& Objects)
@@ -1195,31 +1203,53 @@ bool ModCoreEvents::AddApexToMountCall(HRZ2::RTTIRefObject *ApexSetup, HRZ2::RTT
 		if (!listed)
 			continue;
 
+		// Streaming references can't be registered while a group is loading; do it from a job once it's done
 		if (added.insert(ApexSetup->m_UUID).second)
-		{
-			// Grow the array as plain pointers, then register the new reference in place. Register it by UUID, like the
-			// game's own references, so it can be streamed back in after the Apex spawn setup unloads.
-			auto& raw = reinterpret_cast<Array<uintptr_t>&>(setups);
-			raw.push_back(0);
-			StreamingManager::GetInstance()->Register2(reinterpret_cast<StreamingRefBase&>(raw[raw.size() - 1]), {}, ApexSetup->m_UUID);
-
-			spdlog::info("[apex] {}: added to mount call {} ({} spawn setups)", ApexSetup->m_UUID, component->m_UUID, setups.size());
-		}
+			m_ApexPendingCalls.emplace_back(component, ApexSetup->m_UUID);
 
 		// The called Apex machine gets its hackable component from the regular version, which must stay loaded
 		if (m_ApexKeepLoadedUUIDs.insert(DonorSetup->m_UUID).second)
-		{
-			auto& ref = m_ApexKeepLoaded.emplace_back();
-			StreamingManager::GetInstance()->Register2(ref, {}, DonorSetup->m_UUID);
-
-			JobHeaderCPU::SubmitCallable([&ref]() { StreamingManager::GetInstance()->Resolve(ref, EStreamingRefPriority::Normal); });
-			spdlog::info("[apex] keeping {} loaded", DonorSetup->m_UUID);
-		}
+			m_ApexPendingKeepLoaded.push_back(DonorSetup->m_UUID);
 
 		return true;
 	}
 
 	return false;
+}
+
+void ModCoreEvents::ProcessApexPendingStreaming()
+{
+	using namespace HRZ2;
+
+	std::scoped_lock lock(m_ApexMutex);
+	auto manager = StreamingManager::GetInstance();
+
+	for (const auto& [component, uuid] : m_ApexPendingCalls)
+	{
+		if (!m_MountCallComponents.contains(component))
+			continue;
+
+		// Grow the array as plain pointers, then register the new reference in place by UUID, like the game's own
+		// references, so it can be streamed in from anywhere
+		auto& setups = component->GetMemberRefUnsafe<Array<StreamingRef<RTTIRefObject>>>("HorseSpawnSetups");
+		auto& raw = reinterpret_cast<Array<uintptr_t>&>(setups);
+		raw.push_back(0);
+		manager->Register2(reinterpret_cast<StreamingRefBase&>(raw[raw.size() - 1]), {}, uuid);
+
+		spdlog::info("[apex] {}: added to mount call {} ({} spawn setups)", uuid, component->m_UUID, setups.size());
+	}
+
+	for (const auto& uuid : m_ApexPendingKeepLoaded)
+	{
+		auto& ref = m_ApexKeepLoaded.emplace_back();
+		manager->Register2(ref, {}, uuid);
+		manager->Resolve(ref, EStreamingRefPriority::Normal);
+
+		spdlog::info("[apex] keeping {} loaded", uuid);
+	}
+
+	m_ApexPendingCalls.clear();
+	m_ApexPendingKeepLoaded.clear();
 }
 
 static bool SafeReadQword(const void *Address, uint64_t& Value)

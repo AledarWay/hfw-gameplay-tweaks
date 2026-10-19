@@ -115,6 +115,10 @@ private:
 	std::unordered_map<HRZ2::RTTIRefObject *, std::unordered_set<HRZ2::GGUUID>> m_MountCallComponents; // Apex setups added to each
 	std::deque<HRZ2::StreamingRef<HRZ2::RTTIRefObject>> m_ApexKeepLoaded;
 	std::unordered_set<HRZ2::GGUUID> m_ApexKeepLoadedUUIDs;
+	std::vector<std::pair<HRZ2::RTTIRefObject *, HRZ2::GGUUID>> m_ApexPendingCalls; // Mount call component, Apex setup
+	std::vector<HRZ2::GGUUID> m_ApexPendingKeepLoaded;
+
+	void ProcessApexPendingStreaming();
 
 	bool AddApexToMountCall(HRZ2::RTTIRefObject *ApexSetup, HRZ2::RTTIRefObject *DonorSetup, const HRZ2::GGUUID& Callable);
 
