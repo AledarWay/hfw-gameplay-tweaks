@@ -140,7 +140,6 @@ namespace InternalModConfig
 			PARSE_TOML_MEMBER(gameplay, UnlockMapBoundaries);
 			PARSE_TOML_MEMBER(gameplay, UnlockWorldMapMenu);
 			PARSE_TOML_MEMBER(gameplay, UnlockMountRestrictions);
-			PARSE_TOML_MEMBER(gameplay, UnlockSpawnAreaRestrictions);
 			PARSE_TOML_MEMBER(gameplay, UnlockEntitlementExtras);
 			PARSE_TOML_MEMBER(gameplay, UnlockPhotomodeRestrictions);
 			PARSE_TOML_MEMBER(gameplay, UnlockAIvsAIDamage);
