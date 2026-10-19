@@ -88,6 +88,7 @@ namespace InternalModConfig
 		bool UnlockAIvsAIDamage;
 		bool UnlockUltraHardRestrictions;
 		bool UnlockTrapAndTripwireLimits;
+		bool NoCampfireSaveBlackScreen;
 
 		bool EnableFreePerks;
 		bool EnableFreeCrafting;
