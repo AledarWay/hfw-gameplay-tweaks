@@ -1,7 +1,7 @@
 #pragma once
 
-// Wild machines (and camp guards) are kept inside the defend area of their spawn site by the HTN planner daemon that
-// publishes the agent's active defend area. Disabling its update leaves them without one.
+// Removes the leash that keeps wild machines (and camp guards) at their spawn site: spawn commands give them a defend
+// area and a navmesh area restriction the pathfinder won't leave.
 namespace DefendArea
 {
 	void TryInstall();

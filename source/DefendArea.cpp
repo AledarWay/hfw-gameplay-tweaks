@@ -1,6 +1,7 @@
 #include <Windows.h>
 #include <algorithm>
 #include <cstring>
+#include <mutex>
 #include <string_view>
 #include "Hooking/Memory.h"
 #include "ModConfiguration.h"
@@ -84,6 +85,48 @@ namespace DefendArea
 		void SkipDefendAreaUpdate(void *)
 		{
 		}
+
+		// SpawnCommand::Apply(this, ?, ?, entities)
+		using ApplyFn = void (*)(void *, void *, void *, void *, void *, void *);
+		ApplyFn OriginalAreaRestrictionApply = nullptr;
+		std::mutex AreaRestrictionMutex;
+
+		void SkipDefendSpawnCommand(void *, void *, void *, void *, void *, void *)
+		{
+		}
+
+		// Apply with an empty Areas list (offset 0x60) so only DisallowedAreas (0x70) are restricted
+		void AreaRestrictionApplyDisallowedOnly(void *This, void *A2, void *A3, void *A4, void *A5, void *A6)
+		{
+			std::scoped_lock lock(AreaRestrictionMutex);
+
+			auto& areaCount = *reinterpret_cast<int32_t *>(static_cast<uint8_t *>(This) + 0x60);
+			const auto count = areaCount;
+
+			areaCount = 0;
+			OriginalAreaRestrictionApply(This, A2, A3, A4, A5, A6);
+			areaCount = count;
+		}
+
+		bool PatchSlot(const char *Class, size_t Slot, const void *Replacement, void **Original = nullptr)
+		{
+			auto vtable = FindVtable(Class);
+
+			if (!vtable)
+			{
+				spdlog::error("[leash] {} vtable not found", Class);
+				return false;
+			}
+
+			if (Original)
+				*Original = reinterpret_cast<void *>(vtable[Slot]);
+
+			const auto value = reinterpret_cast<uintptr_t>(Replacement);
+			Memory::Patch(reinterpret_cast<uintptr_t>(&vtable[Slot]), reinterpret_cast<const uint8_t *>(&value), sizeof(value));
+
+			spdlog::info("[leash] patched {} slot {}", Class, Slot);
+			return true;
+		}
 	}
 
 	void TryInstall()
@@ -96,18 +139,12 @@ namespace DefendArea
 		installed = true;
 
 		// Slot 7 updates the agent's world state from its DefendAreaUserComponent
-		constexpr size_t UpdateSlot = 7;
-		auto vtable = FindVtable(".?AVAIHTNPlannerDaemonDefendArea@@");
+		PatchSlot(".?AVAIHTNPlannerDaemonDefendArea@@", 7, reinterpret_cast<const void *>(&SkipDefendAreaUpdate));
 
-		if (!vtable)
-		{
-			spdlog::error("[leash] AIHTNPlannerDaemonDefendArea vtable not found");
-			return;
-		}
-
-		const auto stub = reinterpret_cast<uintptr_t>(&SkipDefendAreaUpdate);
-		Memory::Patch(reinterpret_cast<uintptr_t>(&vtable[UpdateSlot]), reinterpret_cast<const uint8_t *>(&stub), sizeof(stub));
-
-		spdlog::info("[leash] defend area daemon disabled (vtable {:X})", reinterpret_cast<uintptr_t>(vtable));
+		// Slot 6 applies a spawn command to the spawned entities: defend areas and navmesh area restrictions (the
+		// boundary the pathfinder won't cross)
+		PatchSlot(".?AVDefendSpawnCommand@@", 6, reinterpret_cast<const void *>(&SkipDefendSpawnCommand));
+		PatchSlot(".?AVAreaRestrictionSpawnCommand@@", 6, reinterpret_cast<const void *>(&AreaRestrictionApplyDisallowedOnly),
+			reinterpret_cast<void **>(&OriginalAreaRestrictionApply));
 	}
 }
