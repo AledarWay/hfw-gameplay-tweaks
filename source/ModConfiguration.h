@@ -111,6 +111,7 @@ namespace InternalModConfig
 		bool AllowApexOverride;
 		bool ApexOverrideAllVariants;
 		bool ApexOverrideDebug;
+		bool ApexCallAsApex;
 
 		// [FlyingMountAI]
 		struct

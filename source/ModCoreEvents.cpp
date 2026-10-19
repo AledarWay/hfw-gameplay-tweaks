@@ -793,6 +793,9 @@ void ModCoreEvents::TrackApexSetups(const HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRefObj
 				unloading.insert(object.GetPtr());
 		}
 
+		for (auto object : unloading)
+			m_MountCallComponents.erase(object);
+
 		// Donors whose spawn setup or hackable resource goes away
 		std::unordered_set<HRZ2::RTTIRefObject *> lostHackables;
 
@@ -851,6 +854,7 @@ void ModCoreEvents::TrackApexSetups(const HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRefObj
 				try
 				{
 					auto& setups = object->GetMemberRefUnsafe<HRZ2::Array<HRZ2::StreamingRef<HRZ2::RTTIRefObject>>>("HorseSpawnSetups");
+					m_MountCallComponents.try_emplace(object.GetPtr());
 
 					for (size_t i = 0; i < setups.size(); i++)
 					{
@@ -1070,6 +1074,9 @@ void ModCoreEvents::TrackApexSetups(const HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRefObj
 				if (present || !m_CallableMountSetups.contains(uuid))
 					continue;
 
+				if (ModConfiguration.ApexCallAsApex && AddApexToMountCall(setup, best->m_Setup, uuid))
+					continue;
+
 				hierarchy.push_back(uuid);
 				recipient.m_AddedHierarchy.push_back(uuid);
 				spdlog::info("[apex] {}: callable as {}", recipient.m_UUID, uuid);
@@ -1167,6 +1174,42 @@ void ModCoreEvents::LogApexCandidates(const ApexRecipient& Recipient, const std:
 		for (auto object : onlyDonor)
 			spdlog::info("[apex-debug]     donor only: {}", describe(object));
 	}
+}
+
+bool ModCoreEvents::AddApexToMountCall(HRZ2::RTTIRefObject *ApexSetup, HRZ2::RTTIRefObject *DonorSetup, const HRZ2::GGUUID& Callable)
+{
+	using namespace HRZ2;
+
+	// The Apex spawn setup has itself in its hierarchy, so listing it in the call component makes the call spawn it
+	for (auto& [component, added] : m_MountCallComponents)
+	{
+		auto& setups = component->GetMemberRefUnsafe<Array<StreamingRef<RTTIRefObject>>>("HorseSpawnSetups");
+		bool listed = false;
+
+		for (size_t i = 0; i < setups.size() && !listed; i++)
+			listed = setups[i].GetUUID() == Callable;
+
+		if (!listed)
+			continue;
+
+		if (added.insert(ApexSetup->m_UUID).second)
+		{
+			// Grow the array as plain pointers, then register the new reference in place
+			auto& raw = reinterpret_cast<Array<uintptr_t>&>(setups);
+			raw.push_back(0);
+			StreamingManager::GetInstance()->Register4(reinterpret_cast<StreamingRefBase&>(raw[raw.size() - 1]), ApexSetup, 5);
+
+			spdlog::info("[apex] {}: added to mount call {} ({} spawn setups)", ApexSetup->m_UUID, component->m_UUID, setups.size());
+		}
+
+		// The called Apex machine gets its hackable component from the regular version, which must stay loaded
+		if (m_ApexKeepLoadedUUIDs.insert(DonorSetup->m_UUID).second)
+			StreamingManager::GetInstance()->Register4(m_ApexKeepLoaded.emplace_back(), DonorSetup, 5);
+
+		return true;
+	}
+
+	return false;
 }
 
 static bool SafeReadQword(const void *Address, uint64_t& Value)

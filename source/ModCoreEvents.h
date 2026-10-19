@@ -1,7 +1,9 @@
 #pragma once
 
+#include <deque>
 #include <mutex>
 #include <unordered_set>
+#include "HRZ2/Core/IStreamingManager.h"
 #include "HRZ2/Core/IStreamingSystem.h"
 #include "HRZ2/Core/RTTIObjectTweaker.h"
 #include "HRZ2/PCore/Common.h"
@@ -110,6 +112,11 @@ private:
 	std::mutex m_ApexMutex;
 	std::unordered_set<HRZ2::GGUUID> m_ApexDebugLogged;
 	std::unordered_set<HRZ2::GGUUID> m_CallableMountSetups;
+	std::unordered_map<HRZ2::RTTIRefObject *, std::unordered_set<HRZ2::GGUUID>> m_MountCallComponents; // Apex setups added to each
+	std::deque<HRZ2::StreamingRef<HRZ2::RTTIRefObject>> m_ApexKeepLoaded;
+	std::unordered_set<HRZ2::GGUUID> m_ApexKeepLoadedUUIDs;
+
+	bool AddApexToMountCall(HRZ2::RTTIRefObject *ApexSetup, HRZ2::RTTIRefObject *DonorSetup, const HRZ2::GGUUID& Callable);
 
 	void LogApexCandidates(const ApexRecipient& Recipient, const std::vector<ApexDonor>& Donors);
 
