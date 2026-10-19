@@ -1086,6 +1086,9 @@ void ModCoreEvents::TrackApexSetups(const HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRefObj
 			{
 				for (size_t i = 0; i < donorHierarchy.size(); i++)
 					spdlog::info("[apex-debug] {} donor hierarchy [{}] {}", recipient.m_UUID, i, donorHierarchy[i]);
+
+				for (size_t i = 0; i < hierarchy.size(); i++)
+					spdlog::info("[apex-debug] {} hierarchy [{}] {}", recipient.m_UUID, i, hierarchy[i]);
 			}
 		}
 		catch (const std::exception& e)
@@ -1194,17 +1197,24 @@ bool ModCoreEvents::AddApexToMountCall(HRZ2::RTTIRefObject *ApexSetup, HRZ2::RTT
 
 		if (added.insert(ApexSetup->m_UUID).second)
 		{
-			// Grow the array as plain pointers, then register the new reference in place
+			// Grow the array as plain pointers, then register the new reference in place. Register it by UUID, like the
+			// game's own references, so it can be streamed back in after the Apex spawn setup unloads.
 			auto& raw = reinterpret_cast<Array<uintptr_t>&>(setups);
 			raw.push_back(0);
-			StreamingManager::GetInstance()->Register4(reinterpret_cast<StreamingRefBase&>(raw[raw.size() - 1]), ApexSetup, 5);
+			StreamingManager::GetInstance()->Register2(reinterpret_cast<StreamingRefBase&>(raw[raw.size() - 1]), {}, ApexSetup->m_UUID);
 
 			spdlog::info("[apex] {}: added to mount call {} ({} spawn setups)", ApexSetup->m_UUID, component->m_UUID, setups.size());
 		}
 
 		// The called Apex machine gets its hackable component from the regular version, which must stay loaded
 		if (m_ApexKeepLoadedUUIDs.insert(DonorSetup->m_UUID).second)
-			StreamingManager::GetInstance()->Register4(m_ApexKeepLoaded.emplace_back(), DonorSetup, 5);
+		{
+			auto& ref = m_ApexKeepLoaded.emplace_back();
+			StreamingManager::GetInstance()->Register2(ref, {}, DonorSetup->m_UUID);
+
+			JobHeaderCPU::SubmitCallable([&ref]() { StreamingManager::GetInstance()->Resolve(ref, EStreamingRefPriority::Normal); });
+			spdlog::info("[apex] keeping {} loaded", DonorSetup->m_UUID);
+		}
 
 		return true;
 	}
