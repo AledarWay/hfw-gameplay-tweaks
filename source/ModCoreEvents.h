@@ -115,8 +115,18 @@ private:
 	std::unordered_map<HRZ2::RTTIRefObject *, std::unordered_set<HRZ2::GGUUID>> m_MountCallComponents; // Apex setups added to each
 	std::deque<HRZ2::StreamingRef<HRZ2::RTTIRefObject>> m_ApexKeepLoaded;
 	std::unordered_set<HRZ2::GGUUID> m_ApexKeepLoadedUUIDs;
-	std::vector<std::pair<HRZ2::RTTIRefObject *, HRZ2::GGUUID>> m_ApexPendingCalls; // Mount call component, Apex setup
-	std::vector<HRZ2::GGUUID> m_ApexPendingKeepLoaded;
+	struct ApexPendingRef
+	{
+		HRZ2::RTTIRefObject *m_CallComponent = nullptr; // Null: keep loaded
+		HRZ2::GGUUID m_UUID;
+		std::string m_Path;
+	};
+
+	std::vector<ApexPendingRef> m_ApexPending;
+	std::deque<HRZ2::StreamingRef<HRZ2::RTTIRefObject>> m_ApexPathProbes;
+	std::unordered_map<HRZ2::GGUUID, std::string> m_ApexCorePaths;
+
+	std::string GetCorePath(HRZ2::RTTIRefObject *Object);
 
 	void ProcessApexPendingStreaming();
 

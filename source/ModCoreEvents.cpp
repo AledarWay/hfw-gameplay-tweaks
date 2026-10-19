@@ -582,7 +582,7 @@ void ModCoreEvents::OnFinishLoadGroup(const HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRefO
 	{
 		std::scoped_lock lock(m_ApexMutex);
 
-		if (!m_ApexPendingCalls.empty() || !m_ApexPendingKeepLoaded.empty())
+		if (!m_ApexPending.empty())
 			HRZ2::JobHeaderCPU::SubmitCallback([]() { GetInstance().ProcessApexPendingStreaming(); });
 	}
 }
@@ -1203,18 +1203,44 @@ bool ModCoreEvents::AddApexToMountCall(HRZ2::RTTIRefObject *ApexSetup, HRZ2::RTT
 		if (!listed)
 			continue;
 
+		// Streaming references need the core file path of their target. Without one the Apex machine stays callable as
+		// the regular version.
+		const auto apexPath = GetCorePath(ApexSetup);
+		const auto donorPath = GetCorePath(DonorSetup);
+
+		if (apexPath.empty() || donorPath.empty())
+		{
+			spdlog::info("[apex] {}: no core path (apex '{}', donor '{}'), not callable as Apex", ApexSetup->m_UUID, apexPath, donorPath);
+			return false;
+		}
+
 		// Streaming references can't be registered while a group is loading; do it from a job once it's done
 		if (added.insert(ApexSetup->m_UUID).second)
-			m_ApexPendingCalls.emplace_back(component, ApexSetup->m_UUID);
+			m_ApexPending.emplace_back(ApexPendingRef { component, ApexSetup->m_UUID, apexPath });
 
 		// The called Apex machine gets its hackable component from the regular version, which must stay loaded
 		if (m_ApexKeepLoadedUUIDs.insert(DonorSetup->m_UUID).second)
-			m_ApexPendingKeepLoaded.push_back(DonorSetup->m_UUID);
+			m_ApexPending.emplace_back(ApexPendingRef { nullptr, DonorSetup->m_UUID, donorPath });
 
 		return true;
 	}
 
 	return false;
+}
+
+std::string ModCoreEvents::GetCorePath(HRZ2::RTTIRefObject *Object)
+{
+	if (auto itr = m_ApexCorePaths.find(Object->m_UUID); itr != m_ApexCorePaths.end())
+		return itr->second;
+
+	// A reference registered to a loaded object gets the object's locator, path included. Kept around on purpose.
+	auto& probe = m_ApexPathProbes.emplace_back();
+	HRZ2::StreamingManager::GetInstance()->Register4(probe, Object, 5);
+
+	const auto location = probe.GetLocation();
+	std::string path = location.m_Path.c_str() ? location.m_Path.c_str() : "";
+
+	return m_ApexCorePaths[Object->m_UUID] = path;
 }
 
 void ModCoreEvents::ProcessApexPendingStreaming()
@@ -1224,32 +1250,36 @@ void ModCoreEvents::ProcessApexPendingStreaming()
 	std::scoped_lock lock(m_ApexMutex);
 	auto manager = StreamingManager::GetInstance();
 
-	for (const auto& [component, uuid] : m_ApexPendingCalls)
+	for (const auto& pending : m_ApexPending)
 	{
-		if (!m_MountCallComponents.contains(component))
+		AssetPath path;
+		path.m_Path = String(pending.m_Path);
+
+		if (!pending.m_CallComponent)
+		{
+			auto& ref = m_ApexKeepLoaded.emplace_back();
+			manager->Register2(ref, path, pending.m_UUID);
+			manager->Resolve(ref, EStreamingRefPriority::Normal);
+
+			spdlog::info("[apex] keeping {} loaded ({})", pending.m_UUID, pending.m_Path);
+			continue;
+		}
+
+		if (!m_MountCallComponents.contains(pending.m_CallComponent))
 			continue;
 
-		// Grow the array as plain pointers, then register the new reference in place by UUID, like the game's own
-		// references, so it can be streamed in from anywhere
-		auto& setups = component->GetMemberRefUnsafe<Array<StreamingRef<RTTIRefObject>>>("HorseSpawnSetups");
+		// Grow the array as plain pointers, then register the new reference in place by path and UUID, like the game's
+		// own references, so it can be streamed in from anywhere
+		auto& setups = pending.m_CallComponent->GetMemberRefUnsafe<Array<StreamingRef<RTTIRefObject>>>("HorseSpawnSetups");
 		auto& raw = reinterpret_cast<Array<uintptr_t>&>(setups);
 		raw.push_back(0);
-		manager->Register2(reinterpret_cast<StreamingRefBase&>(raw[raw.size() - 1]), {}, uuid);
+		manager->Register2(reinterpret_cast<StreamingRefBase&>(raw[raw.size() - 1]), path, pending.m_UUID);
 
-		spdlog::info("[apex] {}: added to mount call {} ({} spawn setups)", uuid, component->m_UUID, setups.size());
+		spdlog::info("[apex] {}: added to mount call {} ({} spawn setups, {})", pending.m_UUID, pending.m_CallComponent->m_UUID,
+			setups.size(), pending.m_Path);
 	}
 
-	for (const auto& uuid : m_ApexPendingKeepLoaded)
-	{
-		auto& ref = m_ApexKeepLoaded.emplace_back();
-		manager->Register2(ref, {}, uuid);
-		manager->Resolve(ref, EStreamingRefPriority::Normal);
-
-		spdlog::info("[apex] keeping {} loaded", uuid);
-	}
-
-	m_ApexPendingCalls.clear();
-	m_ApexPendingKeepLoaded.clear();
+	m_ApexPending.clear();
 }
 
 static bool SafeReadQword(const void *Address, uint64_t& Value)
