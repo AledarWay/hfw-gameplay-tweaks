@@ -140,6 +140,7 @@ namespace InternalModConfig
 			PARSE_TOML_MEMBER(gameplay, UnlockMapBoundaries);
 			PARSE_TOML_MEMBER(gameplay, UnlockWorldMapMenu);
 			PARSE_TOML_MEMBER(gameplay, UnlockMountRestrictions);
+			PARSE_TOML_MEMBER(gameplay, UnlockSpawnAreaRestrictions);
 			PARSE_TOML_MEMBER(gameplay, UnlockEntitlementExtras);
 			PARSE_TOML_MEMBER(gameplay, UnlockPhotomodeRestrictions);
 			PARSE_TOML_MEMBER(gameplay, UnlockAIvsAIDamage);
@@ -498,6 +499,15 @@ namespace InternalModConfig
 			.ObjectTypes = "DiscoverableAreaResource",
 			.Path = "FogOfWarRevealType",
 			.Value = "Full",
+		});
+
+		// UnlockSpawnAreaRestrictions: spawned AIs are kept inside the navmesh areas of their spawn's area restriction
+		s.AssetOverrides.emplace_back(AssetOverride
+		{
+			.Enabled = s.UnlockSpawnAreaRestrictions,
+			.ObjectTypes = "AreaRestrictionSpawnCommand",
+			.Path = "Areas",
+			.Value = "",
 		});
 
 		// UnlockMountRestrictions

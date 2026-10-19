@@ -83,6 +83,7 @@ namespace InternalModConfig
 		bool UnlockMapBoundaries;
 		bool UnlockWorldMapMenu;
 		bool UnlockMountRestrictions;
+		bool UnlockSpawnAreaRestrictions;
 		bool UnlockEntitlementExtras;
 		bool UnlockPhotomodeRestrictions;
 		bool UnlockAIvsAIDamage;
