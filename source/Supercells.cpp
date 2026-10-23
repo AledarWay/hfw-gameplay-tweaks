@@ -39,6 +39,7 @@ namespace Supercells
 		constexpr int StateDissipate = 5;
 		constexpr int StateForming = 6;
 		constexpr int StateActive = 7;
+		constexpr int StateDisabled = 11; // Entered when AETHER merges
 		constexpr size_t StateOffset = 0x28;
 		constexpr size_t FormingTimer = 0x14;
 		constexpr size_t ActiveTimer = 0x1C;
@@ -624,7 +625,23 @@ namespace Supercells
 			RefreshPlayerOverride();
 
 			const auto result = g_OriginalSceneUpdate(A, B, State, InstancePtr, E, F);
-			const int after = *reinterpret_cast<int *>(base + StateOffset);
+			int after = *reinterpret_cast<int *>(base + StateOffset);
+
+			// The merge quest switches the running container off directly, the fact overrides only cover later loads.
+			// Restart it the way a save load does.
+			if (after == StateDisabled && ModConfiguration.KeepSupercellsAfterAether)
+			{
+				static unsigned long long lastLog = 0;
+
+				if (const auto now = GetTickCount64(); now - lastLog > 10000)
+				{
+					lastLog = now;
+					spdlog::info("[supercells] container was disabled (state {} -> {}), restarting it", before, after);
+				}
+
+				*reinterpret_cast<int *>(base + StateOffset) = 0;
+				after = 0;
+			}
 
 			if (after == StateForming && before != StateForming)
 				OnLocationChosen(instance);
@@ -794,7 +811,7 @@ namespace Supercells
 			return "forming";
 		case StateActive:
 			return "active";
-		case 11:
+		case StateDisabled:
 			return "disabled (AETHER merged)";
 		}
 
