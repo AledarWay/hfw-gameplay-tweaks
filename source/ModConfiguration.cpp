@@ -145,7 +145,6 @@ namespace InternalModConfig
 			PARSE_TOML_MEMBER(gameplay, UnlockAIvsAIDamage);
 			PARSE_TOML_MEMBER(gameplay, UnlockUltraHardRestrictions);
 			PARSE_TOML_MEMBER(gameplay, UnlockTrapAndTripwireLimits);
-			PARSE_TOML_MEMBER(gameplay, NoCampfireSaveBlackScreen);
 
 			PARSE_TOML_MEMBER(gameplay, EnableFreePerks);
 			PARSE_TOML_MEMBER(gameplay, EnableFreeCrafting);
@@ -615,16 +614,6 @@ namespace InternalModConfig
 			.ObjectTypes = "DifficultyPresetResource",
 			.Path = "IsTrajectoryAssistAllowed",
 			.Value = "true",
-		});
-
-		// NoCampfireSaveBlackScreen: screen effect events of the campfire save sequence that fade to and hold black
-		s.AssetOverrides.emplace_back(AssetOverride
-		{
-			.Enabled = s.NoCampfireSaveBlackScreen,
-			.ObjectUUIDs = "D5C403E9-37B7-C247-9485-F85C0FBAD22F,6E917529-55A2-D04B-AE6D-ABCD2357B5B2,F6882B8E-4B23-DD4C-887D-CF9E3062F8E0,"
-						   "3978F20B-B300-4649-83F8-2CFA10FD20FE,A4D81F39-9E5B-5747-B514-A20EC157086F,2570F6E2-7D29-7935-BDBA-9960A83341CD",
-			.Path = "BlendWeight",
-			.Value = "0",
 		});
 
 		// UnlockTrapAndTripwireLimits
