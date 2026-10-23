@@ -206,7 +206,7 @@ namespace HRZ2::DebugUI
 				if (l.m_Blocked)
 					ImGui::TextColored(Warning, "blocked by quest");
 				else if (!l.m_RandomByGame)
-					ImGui::TextDisabled("not rolled by the game, off by default");
+					ImGui::TextDisabled("not rolled by the game");
 				else
 					ImGui::TextDisabled("ok");
 
