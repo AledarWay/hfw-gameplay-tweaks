@@ -38,7 +38,7 @@ namespace Supercells
 		float m_Rotation = 0.0f;
 		int m_Variant = 0;
 		bool m_Flip = false;
-		bool m_RandomByGame = true; // The game's roll never reaches the last location
+		bool m_RandomByGame = true; // The game's roll never reaches the last location, off unless enabled
 		bool m_Blocked = false;
 		std::string m_BlockedBy;
 	};
@@ -55,7 +55,6 @@ namespace Supercells
 
 	struct SelectionSettings
 	{
-		bool m_IncludeAll = false;
 		bool m_IgnoreQuestBlocks = false;
 		bool m_UseCustom = false;
 	};
@@ -66,19 +65,6 @@ namespace Supercells
 	Status GetStatus();
 	const char *StateName(int State);
 
-	struct LightningStatus
-	{
-		bool m_Known = false;	// The storm scripts have been seen using the lightning facts
-		bool m_Enabled = false; // Lightning sequences may run (storm is up)
-		int m_Step = 0;			// 0 = idle between strikes
-	};
-
-	void RequestNextStorm();
-	void RemoveCurrentStorm(); // Ends the storm and pauses new ones
-	void SetStormsPaused(bool Paused);
-	bool GetStormsPaused();
-	void TriggerLightning();
-	LightningStatus GetLightningStatus();
 	void SetHoldStorm(bool Hold);
 	bool GetHoldStorm();
 
@@ -88,19 +74,11 @@ namespace Supercells
 	std::vector<GameLocation> GetGameLocations();
 	void SetGameLocationEnabled(int Index, bool Enabled);
 	std::vector<CustomLocation> GetCustomLocations();
-	void AddCustomLocation(const CustomLocation& Location);
-	void RemoveCustomLocation(size_t Index);
 	void SetCustomLocationEnabled(size_t Index, bool Enabled);
-	std::string CustomLocationsToToml();
-	void SpawnAtGameLocation(int Index);
-	void SpawnAtCustomLocation(size_t Index);
-	void SpawnAt(const double Position[3], bool KeepGameAltitude);
 
 	// Overrides for what the storm scripts read
 	void SetPositionOverride(PositionMode Mode, const double Position[3], bool KeepAltitude);
 	PositionMode GetPositionMode();
 
-	// Writes the size facts directly, 0 leaves that value to the game
-	void SetSizeOverride(bool Enable, float Inner, float Outer, float BlendRadius);
 	bool GetPlayerPosition(double Out[3]);
 }

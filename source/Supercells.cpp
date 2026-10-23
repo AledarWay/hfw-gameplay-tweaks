@@ -30,8 +30,6 @@ namespace Supercells
 			"EntryPoint_SuperCellScriptContainer_eaae50a7816c4b1590d67387535ffbc9_5_HandleEvent_MsgSceneUpdate";
 
 		constexpr auto PositionFact = GGUUID::Parse("9F73BE2D-14F3-A840-BD6A-172FF8623CEA");
-		constexpr auto LightningStepFact = GGUUID::Parse("4E06708B-711A-BD43-BF8B-EC33FF8AE870");
-		constexpr auto LightningEnabledFact = GGUUID::Parse("5C170C27-4541-8241-861E-41C714C4EAD8");
 		constexpr auto QuestInProgress = GGUUID::Parse("AE6A579F-D1DD-8441-856F-5599DB49825D");
 
 		// Container state machine (MsgSceneUpdate, r8): state index at +0x28, per-state timers before it.
@@ -109,15 +107,7 @@ namespace Supercells
 		std::atomic_int g_CustomIndex = -1;
 		std::atomic<uint8_t *> g_Instance = nullptr;
 
-		std::atomic_bool g_SkipRequested = false;
 		std::atomic_bool g_Hold = false;
-		std::atomic_bool g_RemoveRequested = false;
-		std::atomic_bool g_Paused = false;
-		std::atomic_bool g_LightningRequested = false;
-		std::atomic_uint64_t g_LightningRequestTick = 0;
-		std::atomic_bool g_LightningKnown = false;
-		std::atomic_bool g_LightningEnabled = false;
-		std::atomic_int g_LightningStep = 0;
 		float g_HeldTime = -1.0f;
 
 		std::mutex g_PositionMutex;
@@ -125,18 +115,13 @@ namespace Supercells
 		bool g_KeepAltitude = true;
 		double g_LastPlayerOverride[3] = {};
 
-		std::mutex g_SizeMutex;
-		bool g_SizeEnabled = false;
-		float g_SizeValues[3] = {}; // Inner, outer, blend radius
-
 		// Location selection, shared with the UI
 		std::mutex g_SelectMutex;
 		SelectionSettings g_Settings;
 		std::vector<bool> g_GameEnabled(MaxLocations, true);
+		int g_LocationCount = 0;
+		bool g_LastEnabled = false; // The game's roll never reaches its last location
 		std::vector<CustomLocation> g_Custom;
-		int g_ForcedGame = -1;
-		int g_ForcedCustom = -1;
-		std::optional<CustomLocation> g_ForcedPoint;
 		int g_LastPick = -1; // >= 0 game, <= -2 custom (-2 - index)
 		bool g_BlockOverridesDirty = true;
 
@@ -356,6 +341,11 @@ namespace Supercells
 			const auto locations = ReadLocations(Base);
 			std::vector<GameLocation> snapshot;
 
+			{
+				std::scoped_lock lock(g_SelectMutex);
+				g_LocationCount = static_cast<int>(locations.size());
+			}
+
 			// Name the quest facts that block locations
 			for (int index : { 0, 2, 3 })
 			{
@@ -366,9 +356,11 @@ namespace Supercells
 			}
 
 			std::vector<bool> enabled;
+			bool lastEnabled;
 			{
 				std::scoped_lock lock(g_SelectMutex);
 				enabled = g_GameEnabled;
+				lastEnabled = g_LastEnabled;
 			}
 
 			for (int i = 0; i < static_cast<int>(locations.size()); i++)
@@ -376,7 +368,8 @@ namespace Supercells
 				const auto& l = locations[i];
 				GameLocation g;
 				g.m_Index = i;
-				g.m_Enabled = enabled[i];
+				g.m_RandomByGame = i < static_cast<int>(locations.size()) - 1;
+				g.m_Enabled = g.m_RandomByGame ? enabled[i] : lastEnabled;
 				g.m_HavePosition = l.m_HavePosition;
 				std::copy_n(l.m_Position, 3, g.m_Position);
 				g.m_Inner = l.m_Inner;
@@ -385,7 +378,6 @@ namespace Supercells
 				g.m_Rotation = l.m_Rotation;
 				g.m_Variant = l.m_Variant;
 				g.m_Flip = l.m_Flip;
-				g.m_RandomByGame = i < static_cast<int>(locations.size()) - 1;
 				g.m_Blocked = IsBlocked(Base, i, &g.m_BlockedBy);
 				snapshot.emplace_back(std::move(g));
 			}
@@ -421,16 +413,14 @@ namespace Supercells
 			g_ActiveCustom.reset();
 			g_CustomIndex = -1;
 
-			std::optional<CustomLocation> point = std::exchange(g_ForcedPoint, std::nullopt);
-			int pick = std::exchange(g_ForcedGame, -1);
-			const int forcedCustom = std::exchange(g_ForcedCustom, -1);
+			std::optional<CustomLocation> point;
+			int pick = -1;
 
-			if (forcedCustom >= 0 && forcedCustom < static_cast<int>(g_Custom.size()))
-				pick = -2 - forcedCustom;
+			auto isEnabled = [&](int Index) { return Index == count - 1 ? g_LastEnabled : g_GameEnabled[Index]; };
+			bool select = g_Settings.m_UseCustom;
 
-			const bool forced = point || pick != -1;
-			const bool select = forced || g_Settings.m_IncludeAll || g_Settings.m_UseCustom ||
-								std::any_of(g_GameEnabled.begin(), g_GameEnabled.begin() + std::min(count, MaxLocations), [](bool e) { return !e; });
+			for (int i = 0; i < std::min(count, MaxLocations); i++)
+				select |= isEnabled(i) != (i != count - 1);
 
 			if (!select || count == 0)
 			{
@@ -438,16 +428,14 @@ namespace Supercells
 				return;
 			}
 
-			if (!forced)
 			{
 				auto collect = [&](bool AllowRepeat)
 				{
 					std::vector<int> candidates;
-					const int gameCount = g_Settings.m_IncludeAll ? count : count - 1;
 
-					for (int i = 0; i < gameCount; i++)
+					for (int i = 0; i < std::min(count, MaxLocations); i++)
 					{
-						if (!g_GameEnabled[i] || (!AllowRepeat && i == g_LastPick))
+						if (!isEnabled(i) || (!AllowRepeat && i == g_LastPick))
 							continue;
 
 						if (!g_Settings.m_IgnoreQuestBlocks && IsBlocked(Base, i))
@@ -565,31 +553,6 @@ namespace Supercells
 				WritePosition(ctx.Get(), fact, g_ActivePosition);
 		}
 
-		void ApplySizeOverride(uint8_t *Base)
-		{
-			float values[3];
-			{
-				std::scoped_lock lock(g_SizeMutex);
-
-				if (!g_SizeEnabled)
-					return;
-
-				std::copy_n(g_SizeValues, 3, values);
-			}
-
-			FactContext ctx(Base);
-			const size_t links[3] = { Instance::InnerLink, Instance::OuterLink, Instance::BlendRadiusLink };
-
-			for (int i = 0; i < 3; i++)
-			{
-				auto fact = Link(Base, links[i]);
-				const auto current = ReadFloat(ctx.Get(), fact);
-
-				if (values[i] > 0.0f && current && std::abs(*current - values[i]) > 0.5f)
-					WriteFloat(ctx.Get(), fact, values[i]);
-			}
-		}
-
 		std::vector<std::string> StormGraphs()
 		{
 			return { LimiterTag, WeatherTag };
@@ -627,41 +590,6 @@ namespace Supercells
 			ApplyPositionOverride(position, g_KeepAltitude);
 		}
 
-		// Lightning runs in the storm animation script: while enabled, a step of 0 waits and 1 starts a strike sequence
-		void UpdateLightning(uint8_t *Base)
-		{
-			const auto step = GetObservedFact(LightningStepFact);
-			const auto enabled = GetObservedFact(LightningEnabledFact);
-			const auto now = GetTickCount64();
-
-			// Only touch fact objects the scripts used moments ago
-			if (!step || !enabled || !step->m_Object || !enabled->m_Object || now - step->m_LastTick > 3000 || now - enabled->m_LastTick > 3000)
-			{
-				g_LightningKnown = false;
-				g_LightningRequested = false;
-				return;
-			}
-
-			FactContext ctx(Base);
-			const auto isEnabled = ReadBool(ctx.Get(), enabled->m_Object).value_or(false);
-			const auto current = ReadInt(ctx.Get(), step->m_Object).value_or(-1);
-
-			g_LightningKnown = true;
-			g_LightningEnabled = isEnabled;
-			g_LightningStep = current;
-
-			// A request waits up to 10 s for the running strike to finish
-			if (g_LightningRequested && now - g_LightningRequestTick > 10000)
-				g_LightningRequested = false;
-
-			if (g_LightningRequested && current == 0)
-			{
-				g_LightningRequested = false;
-				WriteInt(ctx.Get(), step->m_Object, 1);
-				spdlog::info("[supercells] lightning strike triggered");
-			}
-		}
-
 		uint64_t HookSceneUpdate(void *A, void *B, void *State, void *InstancePtr, void *E, void *F)
 		{
 			const auto base = static_cast<uint8_t *>(State);
@@ -670,29 +598,12 @@ namespace Supercells
 
 			g_Instance = instance;
 
-			if (g_RemoveRequested)
-			{
-				// Run out the forming timer first, the storm then ends from the active state below
-				if (before == StateForming)
-					*reinterpret_cast<float *>(base + FormingTimer) = *reinterpret_cast<float *>(base + FormingTimer + 4) + 1.0f;
-				else if (before == StateActive)
-					g_SkipRequested = true;
-
-				if (before != StateForming)
-					g_RemoveRequested = false;
-			}
-
 			if (before == StateActive)
 			{
 				auto current = reinterpret_cast<float *>(base + ActiveTimer);
 				auto end = reinterpret_cast<float *>(base + ActiveTimer + 4);
 
-				if (g_SkipRequested.exchange(false))
-				{
-					*current = *end + 1.0f;
-					g_HeldTime = -1.0f;
-				}
-				else if (g_Hold)
+				if (g_Hold)
 				{
 					// Freeze the timer where it was when hold was switched on
 					if (g_HeldTime < 0.0f)
@@ -712,16 +623,13 @@ namespace Supercells
 
 			RefreshPlayerOverride();
 
-			// Paused: hold the container before it picks the next location
-			const bool paused = g_Paused && (before == StateDissipate || before == StateRetryWait || before == StateChoose);
-			const auto result = paused ? uint64_t { 0 } : g_OriginalSceneUpdate(A, B, State, InstancePtr, E, F);
+			const auto result = g_OriginalSceneUpdate(A, B, State, InstancePtr, E, F);
 			const int after = *reinterpret_cast<int *>(base + StateOffset);
 
 			if (after == StateForming && before != StateForming)
 				OnLocationChosen(instance);
 
 			KeepCustomLocation(instance, after);
-			ApplySizeOverride(instance);
 
 			bool blocksDirty;
 			bool ignoreBlocks;
@@ -735,7 +643,6 @@ namespace Supercells
 				UpdateQuestBlockOverrides(instance, ignoreBlocks);
 
 			UpdateSnapshot(instance);
-			UpdateLightning(instance);
 
 			const size_t timer = after == StateActive ? ActiveTimer : after == StateForming ? FormingTimer : 0;
 
@@ -769,7 +676,7 @@ namespace Supercells
 
 		{
 			std::scoped_lock lock(g_SelectMutex);
-			g_Settings.m_IncludeAll = ModConfiguration.SupercellIncludeAllLocations;
+			g_LastEnabled = ModConfiguration.SupercellIncludeAllLocations;
 			g_Settings.m_IgnoreQuestBlocks = ModConfiguration.SupercellIgnoreQuestBlocks;
 			g_Settings.m_UseCustom = ModConfiguration.SupercellUseCustomLocations;
 
@@ -894,48 +801,6 @@ namespace Supercells
 		return "other";
 	}
 
-	void RequestNextStorm()
-	{
-		g_Paused = false;
-		g_RemoveRequested = false;
-		g_SkipRequested = true;
-	}
-
-	void RemoveCurrentStorm()
-	{
-		g_Hold = false;
-		g_Paused = true;
-		g_RemoveRequested = true;
-	}
-
-	void SetStormsPaused(bool Paused)
-	{
-		g_Paused = Paused;
-
-		if (!Paused)
-			g_RemoveRequested = false;
-	}
-
-	bool GetStormsPaused()
-	{
-		return g_Paused;
-	}
-
-	void TriggerLightning()
-	{
-		g_LightningRequestTick = GetTickCount64();
-		g_LightningRequested = true;
-	}
-
-	LightningStatus GetLightningStatus()
-	{
-		LightningStatus s;
-		s.m_Known = g_LightningKnown;
-		s.m_Enabled = g_LightningEnabled;
-		s.m_Step = g_LightningStep;
-		return s;
-	}
-
 	void SetHoldStorm(bool Hold)
 	{
 		g_Hold = Hold;
@@ -972,7 +837,11 @@ namespace Supercells
 
 		{
 			std::scoped_lock lock(g_SelectMutex);
-			g_GameEnabled[Index] = Enabled;
+
+			if (Index == g_LocationCount - 1)
+				g_LastEnabled = Enabled;
+			else
+				g_GameEnabled[Index] = Enabled;
 		}
 
 		std::scoped_lock lock(g_SnapshotMutex);
@@ -990,95 +859,12 @@ namespace Supercells
 		return g_Custom;
 	}
 
-	void AddCustomLocation(const CustomLocation& Location)
-	{
-		std::scoped_lock lock(g_SelectMutex);
-		g_Custom.emplace_back(Location);
-	}
-
-	void RemoveCustomLocation(size_t Index)
-	{
-		std::scoped_lock lock(g_SelectMutex);
-
-		if (Index < g_Custom.size())
-			g_Custom.erase(g_Custom.begin() + Index);
-
-		g_LastPick = -1;
-	}
-
 	void SetCustomLocationEnabled(size_t Index, bool Enabled)
 	{
 		std::scoped_lock lock(g_SelectMutex);
 
 		if (Index < g_Custom.size())
 			g_Custom[Index].m_Enabled = Enabled;
-	}
-
-	std::string CustomLocationsToToml()
-	{
-		std::scoped_lock lock(g_SelectMutex);
-		std::string result;
-
-		for (const auto& c : g_Custom)
-		{
-			result += std::format("[[SupercellLocation]]\nEnable = {}\nX = {:.1f}\nY = {:.1f}\n", c.m_Enabled, c.m_Position[0], c.m_Position[1]);
-
-			if (!c.m_KeepGameAltitude)
-				result += std::format("Z = {:.1f}\n", c.m_Position[2]);
-
-			if (c.m_Inner > 0)
-				result += std::format("Inner = {:.0f}\n", c.m_Inner);
-
-			if (c.m_Outer > 0)
-				result += std::format("Outer = {:.0f}\n", c.m_Outer);
-
-			if (c.m_Template >= 0)
-				result += std::format("Template = {}\n", c.m_Template);
-
-			result += "\n";
-		}
-
-		return result;
-	}
-
-	void SpawnAtGameLocation(int Index)
-	{
-		SetPositionOverride(PositionMode::Off, nullptr, true);
-		{
-			std::scoped_lock lock(g_SelectMutex);
-			g_ForcedGame = Index;
-			g_ForcedCustom = -1;
-			g_ForcedPoint.reset();
-		}
-		RequestNextStorm();
-	}
-
-	void SpawnAtCustomLocation(size_t Index)
-	{
-		SetPositionOverride(PositionMode::Off, nullptr, true);
-		{
-			std::scoped_lock lock(g_SelectMutex);
-			g_ForcedGame = -1;
-			g_ForcedCustom = static_cast<int>(Index);
-			g_ForcedPoint.reset();
-		}
-		RequestNextStorm();
-	}
-
-	void SpawnAt(const double Position[3], bool KeepGameAltitude)
-	{
-		CustomLocation c;
-		std::copy_n(Position, 3, c.m_Position);
-		c.m_KeepGameAltitude = KeepGameAltitude;
-
-		SetPositionOverride(PositionMode::Off, nullptr, true);
-		{
-			std::scoped_lock lock(g_SelectMutex);
-			g_ForcedGame = -1;
-			g_ForcedCustom = -1;
-			g_ForcedPoint = c;
-		}
-		RequestNextStorm();
 	}
 
 	void SetPositionOverride(PositionMode Mode, const double Position[3], bool KeepAltitude)
@@ -1103,15 +889,6 @@ namespace Supercells
 	{
 		std::scoped_lock lock(g_PositionMutex);
 		return g_PositionMode;
-	}
-
-	void SetSizeOverride(bool Enable, float Inner, float Outer, float BlendRadius)
-	{
-		std::scoped_lock lock(g_SizeMutex);
-		g_SizeEnabled = Enable;
-		g_SizeValues[0] = Inner;
-		g_SizeValues[1] = Outer;
-		g_SizeValues[2] = BlendRadius;
 	}
 
 	bool GetPlayerPosition(double Out[3])

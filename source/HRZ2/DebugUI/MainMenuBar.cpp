@@ -72,10 +72,13 @@ namespace HRZ2::DebugUI
 
 		// Credits
 		XorStr creditsBuf("Game keyboard input blocked | HFW Gameplay Tweaks & Cheat Menu by Nukem\0");
-		auto credits = creditsBuf.Decrypt();
+		std::string credits = creditsBuf.Decrypt().data();
 
-		ImGui::SetCursorPosX(ImGui::GetWindowContentRegionMax().x - ImGui::CalcTextSize(credits.data()).x);
-		ImGui::BeginMenu(credits.data(), false);
+		if (double p[3]; Supercells::GetPlayerPosition(p))
+			credits = std::format("X: {:.0f} Y: {:.0f} Z: {:.0f} | {}", p[0], p[1], p[2], credits);
+
+		ImGui::SetCursorPosX(ImGui::GetWindowContentRegionMax().x - ImGui::CalcTextSize(credits.c_str()).x);
+		ImGui::BeginMenu(credits.c_str(), false);
 
 		ImGui::EndMainMenuBar();
 	}
