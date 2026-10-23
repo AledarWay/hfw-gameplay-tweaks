@@ -1,6 +1,5 @@
 #pragma once
 
-#include <atomic>
 #include <mutex>
 #include <unordered_set>
 #include "HRZ2/Core/IStreamingSystem.h"
@@ -111,7 +110,6 @@ private:
 	std::mutex m_ApexMutex;
 	std::unordered_set<HRZ2::GGUUID> m_ApexDebugLogged;
 	std::unordered_set<HRZ2::GGUUID> m_CallableMountSetups;
-	std::atomic_bool m_ApexOverrideEnabled = false;
 
 	void LogApexCandidates(const ApexRecipient& Recipient, const std::vector<ApexDonor>& Donors);
 
@@ -143,10 +141,6 @@ public:
 	virtual void OnFinishLoadGroup(const HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRefObject>>& Objects) override;
 	virtual void OnBeforeUnloadGroup(const HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRefObject>>& Objects) override;
 	virtual void OnLoadAssetGroup(const HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRefObject>>& Objects) override;
-
-	// Experimental, applies to machines spawned afterwards
-	void SetApexOverrideEnabled(bool Enabled);
-	bool IsApexOverrideEnabled() const;
 
 	static ModCoreEvents& GetInstance();
 };

@@ -202,12 +202,6 @@ namespace HRZ2::DebugUI
 		}
 
 		ImGui::MenuItem("Enable Infinite Stamina", nullptr, &debugSettings->m_Inexhaustible);
-
-		if (bool apex = ModCoreEvents::GetInstance().IsApexOverrideEnabled(); ImGui::MenuItem("Allow Apex Override (experimental)", nullptr, &apex))
-			ModCoreEvents::GetInstance().SetApexOverrideEnabled(apex);
-
-		if (ImGui::IsItemHovered())
-			ImGui::SetTooltip("Apex machines become overridable while a regular one of the same machine is loaded nearby.\nApplies to machines spawned afterwards.");
 		ImGui::MenuItem("##sep1", nullptr, nullptr, false);
 
 		if (ImGui::BeginMenu("Teleport To..."))

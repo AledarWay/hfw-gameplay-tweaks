@@ -37,8 +37,6 @@ HRZ2::RTTIObjectTweaker::SetValueVisitor::EMode ModCoreEvents::ValuePatchVisitor
 
 ModCoreEvents::ModCoreEvents()
 {
-	m_ApexOverrideEnabled = ModConfiguration.AllowApexOverride;
-
 	for (const auto& c : ModConfiguration.ComponentInjects)
 	{
 		if (!c.Enabled)
@@ -595,7 +593,8 @@ void ModCoreEvents::OnBeforeUnloadGroup(const HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRe
 	if (!m_RefFindUUIDs.empty())
 		FindReferences(Objects, false);
 
-	TrackApexSetups(Objects, false);
+	if (ModConfiguration.AllowApexOverride)
+		TrackApexSetups(Objects, false);
 
 	for (auto& object : Objects)
 	{
@@ -684,7 +683,8 @@ void ModCoreEvents::OnLoadAssetGroup(const HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRefOb
 	if (!m_RefFindUUIDs.empty())
 		FindReferences(Objects, true);
 
-	TrackApexSetups(Objects, true);
+	if (ModConfiguration.AllowApexOverride)
+		TrackApexSetups(Objects, true);
 }
 
 const std::string& ModCoreEvents::InjectTypeName(const HRZ2::RTTIRefObject *Object)
@@ -936,21 +936,6 @@ void ModCoreEvents::TrackApexSetups(const HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRefObj
 
 void ModCoreEvents::HandOutApexDonorsLocked()
 {
-	// Experimental, can be toggled at runtime
-	if (!m_ApexOverrideEnabled)
-	{
-		for (auto& [setup, recipient] : m_ApexRecipients)
-		{
-			if (recipient.m_Injected)
-			{
-				RemoveApexInjectionLocked(setup, recipient);
-				spdlog::info("[apex] removed override from {} (disabled)", recipient.m_UUID);
-			}
-		}
-
-		return;
-	}
-
 	// Hand out donors to recipients that don't have one
 	for (auto& [setup, recipient] : m_ApexRecipients)
 	{
@@ -1112,23 +1097,6 @@ void ModCoreEvents::HandOutApexDonorsLocked()
 		spdlog::info("[apex] {} can now be overridden (component {} + {} node graphs from {}, {}/{} components shared)", recipient.m_UUID,
 			hackable->m_UUID, recipient.m_InjectedAll.size() - 1, best->m_Setup->m_UUID, bestShared, total);
 	}
-}
-
-void ModCoreEvents::SetApexOverrideEnabled(bool Enabled)
-{
-	std::scoped_lock lock(m_ApexMutex, m_InjectMutex);
-
-	if (m_ApexOverrideEnabled == Enabled)
-		return;
-
-	m_ApexOverrideEnabled = Enabled;
-	spdlog::info("[apex] override {}", Enabled ? "enabled" : "disabled");
-	HandOutApexDonorsLocked();
-}
-
-bool ModCoreEvents::IsApexOverrideEnabled() const
-{
-	return m_ApexOverrideEnabled;
 }
 
 void ModCoreEvents::LogApexCandidates(const ApexRecipient& Recipient, const std::vector<ApexDonor>& Donors)
