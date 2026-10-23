@@ -410,7 +410,6 @@ namespace Htn
 			p.m_Domain = preset.m_Domain;
 			p.m_Offset = preset.m_Offset;
 			p.m_Value = preset.m_Value;
-			p.m_Label = preset.m_Label;
 
 			if (p.m_Value.starts_with("double:"))
 				p.m_Expected = std::bit_cast<uint64_t>(10.0); // look_at_threat run_for_min in both domains
@@ -434,28 +433,5 @@ namespace Htn
 
 		InstallDomain<0>();
 		InstallDomain<1>();
-	}
-
-	std::vector<Patch> GetPatches()
-	{
-		std::scoped_lock lock(g_Mutex);
-		return g_Patches;
-	}
-
-	void SetPatchEnabled(size_t Index, bool Enabled)
-	{
-		std::scoped_lock lock(g_Mutex);
-
-		if (Index >= g_Patches.size())
-			return;
-
-		auto& p = g_Patches[Index];
-		p.m_Enabled = Enabled;
-
-		for (size_t d = 0; d < Domains.size(); d++)
-		{
-			if (p.m_Domain == Domains[d].m_Name && g_States[d].m_Pool)
-				ApplyPatchLocked(p, g_States[d].m_Pool);
-		}
 	}
 }

@@ -35,6 +35,16 @@ Source code for the Horizon Forbidden West mod.
 <details>
   <summary>Click to expand.</summary><br/>
   
+**Fork changes (based on 0.17)**
+  - Added KeepSupercellsAfterAether: supercell storms keep spawning after AETHER merges with GAIA (The Broken Sky) and in the late game.
+  - Added [Supercells] settings: choose which game locations storms use (including the last one the game never picks), ignore quest blocks, add custom storm locations.
+  - Added a Supercell Storms window under Cheats: current storm state and parameters, holding the current storm, location selection, storm position override.
+  - Added teleports to the supercell storm center, its edge and the storm locations.
+  - Added the player's coordinates to the main menu bar.
+  - Added AllowAggressiveFlyingMountOverride: Sunwings and Waterwings can be overridden in aggressive mode.
+  - Added CalledFlyingMountFights and [FlyingMountAI]: the Sunwing/Waterwing called from the hotbar fights like a second overridden one.
+  - Added AllowApexOverride (experimental): Apex machines can be overridden like their regular version while a regular one of the same machine is loaded nearby. Calling it from the hotbar brings the regular version.
+  
 **Version 0.17**
   - Added a cheat to automatically set the player's faction to neutral.
   - Added a hotkey to pause the current time of day.

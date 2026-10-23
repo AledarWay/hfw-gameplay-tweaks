@@ -24,7 +24,6 @@
 #include "WeatherSetupWindow.h"
 #include "SupercellWindow.h"
 #include "../GraphRuntime.h"
-#include "../../Htn.h"
 #include "../../Supercells.h"
 
 namespace HRZ2::DebugUI
@@ -369,23 +368,6 @@ namespace HRZ2::DebugUI
 		{
 			RTTIYamlExporter exporter(RTTIScanner::GetAllTypes());
 			exporter.ExportRTTITypes(".");
-		}
-
-		if (ImGui::BeginMenu("Flying Mount AI", !Htn::GetPatches().empty()))
-		{
-			const auto patches = Htn::GetPatches();
-
-			for (size_t i = 0; i < patches.size(); i++)
-			{
-				const auto& p = patches[i];
-				bool enabled = p.m_Enabled;
-				const auto label = std::format("{}{}##htn{}", p.m_Label, p.m_Error.empty() ? "" : " (" + p.m_Error + ")", i);
-
-				if (ImGui::MenuItem(label.c_str(), nullptr, &enabled))
-					Htn::SetPatchEnabled(i, enabled);
-			}
-
-			ImGui::EndMenu();
 		}
 
 #if 0

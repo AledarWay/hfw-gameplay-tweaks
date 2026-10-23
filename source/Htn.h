@@ -15,7 +15,6 @@ namespace Htn
 		std::string m_Domain;
 		uint32_t m_Offset = 0; // Byte offset in the pool
 		std::string m_Value;   // "fail", "mark-mount", "fail-if-mount", "pass-if-mount", "mark-mount-in-water", "fail-if-mount-in-water", "delay-if-mount" or "double:<x>"
-		std::string m_Label;   // Shown in the menu
 		bool m_Applied = false;
 		uint64_t m_Original = 0;
 		int m_Slot = -1; // Conditional cell slot
@@ -25,7 +24,4 @@ namespace Htn
 
 	void Initialize();
 	void TryInstall();
-
-	std::vector<Patch> GetPatches();
-	void SetPatchEnabled(size_t Index, bool Enabled);
 }
