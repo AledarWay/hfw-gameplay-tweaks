@@ -14,6 +14,18 @@ namespace InternalModConfig
 		std::string Value;
 	};
 
+	struct SupercellLocation
+	{
+		bool Enabled = true;
+		double X = 0;
+		double Y = 0;
+		double Z = 0;
+		bool HasZ = false;
+		float Inner = 0;
+		float Outer = 0;
+		int Template = -1;
+	};
+
 	struct GlobalSettings
 	{
 		GlobalSettings() = default;
@@ -50,6 +62,40 @@ namespace InternalModConfig
 
 		bool ForceCustomUltraHard;
 		bool ForceNoShaderLoadingScreen;
+
+		bool KeepSupercellsAfterAether;
+		bool AllowAggressiveFlyingMountOverride;
+		bool CalledFlyingMountFights;
+		bool AllowApexOverride;
+
+		// [FlyingMountAI]
+		struct
+		{
+			bool Sunwing;
+			bool Waterwing;
+			bool SkipIdleInAir;
+			bool SkipIdleLanded;
+			bool SkipIdleInWater;
+			bool SkipGoToHackerLanded;
+			bool SkipSwimNearHacker;
+			bool SkipWholeLandedBranch;
+			bool NoLandingNextToTarget;
+			bool FlyingRangedAttack;
+			bool NoEvadeInWater;
+			double OutOfWaterDelay;
+			double LookAtThreatSeconds;
+			double RangedAttackWindow;
+			double RangedAttackCooldown;
+		} FlyingMountAI;
+
+		// [Supercells]
+		bool SupercellIncludeAllLocations;
+		bool SupercellIgnoreQuestBlocks;
+		bool SupercellUseCustomLocations;
+		std::vector<int> SupercellDisabledLocations;
+
+		// [[SupercellLocation]]
+		std::vector<SupercellLocation> SupercellLocations;
 
 		// [Hotkeys]
 		struct

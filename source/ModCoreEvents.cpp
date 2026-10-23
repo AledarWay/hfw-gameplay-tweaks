@@ -1,3 +1,5 @@
+#include <algorithm>
+#include <iterator>
 #include <format>
 #include <ranges>
 #include <shared_mutex>
@@ -9,6 +11,9 @@
 #include "HRZ2/Core/RTTIRefObject.h"
 #include "ModConfiguration.h"
 #include "ModCoreEvents.h"
+#include "HRZ2/GraphRuntime.h"
+#include "Htn.h"
+#include "Supercells.h"
 
 ModCoreEvents::ValuePatchVisitor::ValuePatchVisitor(const RTTIValuePatch& Patch)
 {
@@ -467,6 +472,19 @@ void ModCoreEvents::RegisterHardcodedPatches()
 	RegisterCacheCallback("WeatherSetupDLC", m_CachedWeatherSetups);
 	RegisterCacheCallback("LocalWeatherSetup", m_CachedWeatherSetups);
 
+	RegisterCacheCallback("GraphProgramResource", m_CachedGraphPrograms);
+
+	addCallback(
+		RTTI::FindTypeByName("GraphProgramResource"),
+		[](auto& Object)
+		{
+			GraphRuntime::OnGraphProgramLoaded(Object.GetPtr());
+		});
+
+	GraphRuntime::LoadConfig();
+	Supercells::Initialize();
+	Htn::Initialize();
+
 	RegisterCacheCallback("InventoryItemResource", m_CachedInventoryItems);
 
 #undef RegisterCacheCallback
@@ -476,12 +494,19 @@ void ModCoreEvents::OnFinishLoadGroup(const HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRefO
 {
 	if (ModConfiguration.EnableAssetLogging)
 		spdlog::info("OnFinishLoadGroup");
+
+	HRZ2::GraphRuntime::TryInstall();
+	Supercells::TryInstall();
+	Htn::TryInstall();
 }
 
 void ModCoreEvents::OnBeforeUnloadGroup(const HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRefObject>>& Objects)
 {
 	if (ModConfiguration.EnableAssetLogging)
 		spdlog::info("OnBeforeUnloadGroup");
+
+	if (ModConfiguration.AllowApexOverride)
+		TrackApexSetups(Objects, false);
 
 	for (auto& object : Objects)
 	{
@@ -552,6 +577,407 @@ void ModCoreEvents::OnLoadAssetGroup(const HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRefOb
 
 		if (auto itr = m_RTTIPatchesByUUID.find(object->m_UUID); itr != m_RTTIPatchesByUUID.end())
 			visitAll(itr->second);
+	}
+
+	if (ModConfiguration.AllowApexOverride)
+		TrackApexSetups(Objects, true);
+}
+
+const std::string& ModCoreEvents::TypeName(const HRZ2::RTTIRefObject *Object)
+{
+	const HRZ2::RTTI *rtti = Object->GetRTTI();
+	auto name = m_TypeNames.find(rtti);
+
+	if (name == m_TypeNames.end())
+		name = m_TypeNames.emplace(rtti, rtti->GetSymbolName()).first;
+
+	return name->second;
+}
+
+// Components that Apex spawn setups replace with their own tuned versions
+static bool IsApexTuningType(const std::string& Type)
+{
+	static const std::unordered_set<std::string> types = {
+		"DamageModifierComponentResource",
+		"DamageDealtModifierComponentResource",
+		"LootComponentResource",
+		"CollectableRobotComponentResource",
+		"HitReactionComponentResource",
+		"DestructibilityResource",
+		"FocusTargetComponentResource",
+		"CharacterDescriptionComponentResource",
+		"InitialFactsComponentResource",
+		"ShaderOverridesComponentResource",
+		"DestructibilityPartDamageRemapComponentResource",
+		"StaggerStateComponentResource",
+		"KnockDownStateComponentResource",
+		"HitReactionAdditionalSeriesComponentResource",
+	};
+
+	return types.contains(Type);
+}
+
+namespace
+{
+	using ComponentArray = HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRefObject>>;
+
+	ComponentArray *ApexComponents(HRZ2::RTTIRefObject *Setup)
+	{
+		try
+		{
+			return &Setup->GetMemberRefUnsafe<ComponentArray>("ComponentResources");
+		}
+		catch (const std::exception&)
+		{
+			return nullptr;
+		}
+	}
+}
+
+void ModCoreEvents::RemoveApexInjectionLocked(HRZ2::RTTIRefObject *Setup, ApexRecipient& Recipient)
+{
+	if (auto array = ApexComponents(Setup))
+	{
+		for (auto injected : Recipient.m_InjectedAll)
+		{
+			for (size_t i = 0; i < array->size(); i++)
+			{
+				if ((*array)[i].GetPtr() == injected)
+				{
+					(*array)[i] = (*array)[array->size() - 1];
+					array->pop_back();
+					break;
+				}
+			}
+		}
+	}
+
+	try
+	{
+		auto& hierarchy = Setup->GetMemberRefUnsafe<HRZ2::Array<HRZ2::GGUUID>>("SpawnSetupHierarchy");
+
+		for (const auto& uuid : Recipient.m_AddedHierarchy)
+		{
+			for (size_t i = 0; i < hierarchy.size(); i++)
+			{
+				if (hierarchy[i] == uuid)
+				{
+					hierarchy[i] = hierarchy[hierarchy.size() - 1];
+					hierarchy.pop_back();
+					break;
+				}
+			}
+		}
+	}
+	catch (const std::exception&)
+	{
+	}
+
+	Recipient.m_Injected = nullptr;
+	Recipient.m_InjectedAll.clear();
+	Recipient.m_AddedHierarchy.clear();
+}
+
+void ModCoreEvents::TrackApexSetups(const HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRefObject>>& Objects, bool Loaded)
+{
+	std::scoped_lock lock(m_ApexMutex);
+
+	if (!Loaded)
+	{
+		std::unordered_set<HRZ2::RTTIRefObject *> unloading;
+
+		for (auto& object : Objects)
+		{
+			if (object.GetPtr())
+				unloading.insert(object.GetPtr());
+		}
+
+		// Donors whose spawn setup or hackable resource goes away
+		std::unordered_set<HRZ2::RTTIRefObject *> lostHackables;
+
+		for (auto& [entity, donors] : m_ApexDonors)
+		{
+			std::erase_if(donors, [&](const ApexDonor& d)
+			{
+				if (!unloading.contains(d.m_Setup) && !unloading.contains(d.m_Hackable))
+					return false;
+
+				lostHackables.insert(d.m_Hackable);
+				return true;
+			});
+		}
+
+		std::erase_if(m_ApexDonors, [](const auto& e) { return e.second.empty(); });
+
+		for (auto itr = m_ApexRecipients.begin(); itr != m_ApexRecipients.end();)
+		{
+			auto& [setup, recipient] = *itr;
+
+			if (unloading.contains(setup))
+			{
+				itr = m_ApexRecipients.erase(itr);
+				continue;
+			}
+
+			if (recipient.m_Injected)
+			{
+				// Only keep it while another donor of this entity still uses the same resource
+				auto donors = m_ApexDonors.find(recipient.m_Entity);
+				const bool stillDonated = donors != m_ApexDonors.end() &&
+					std::ranges::any_of(donors->second, [&](const ApexDonor& d) { return d.m_Hackable == recipient.m_Injected; });
+				const bool partUnloading = std::ranges::any_of(recipient.m_InjectedAll, [&](auto p) { return unloading.contains(p); });
+
+				if (partUnloading || (lostHackables.contains(recipient.m_Injected) && !stillDonated))
+				{
+					RemoveApexInjectionLocked(setup, recipient);
+					spdlog::info("[apex] removed override from {} (donor unloading)", recipient.m_UUID);
+				}
+			}
+
+			++itr;
+		}
+	}
+	else
+	{
+		for (auto& object : Objects)
+		{
+			if (!object.GetPtr())
+				continue;
+
+			// Spawn setups the mount call components can spawn
+			if (const auto& type = TypeName(object.GetPtr()); type == "GroundMountCallComponentResource" || type == "AirMountCallComponentResource")
+			{
+				try
+				{
+					auto& setups = object->GetMemberRefUnsafe<HRZ2::Array<HRZ2::StreamingRef<HRZ2::RTTIRefObject>>>("HorseSpawnSetups");
+
+					for (size_t i = 0; i < setups.size(); i++)
+						m_CallableMountSetups.insert(setups[i].GetUUID());
+				}
+				catch (const std::exception&)
+				{
+				}
+			}
+
+			if (TypeName(object.GetPtr()) != "SpawnSetup")
+				continue;
+
+			HRZ2::RTTIRefObject *entity = nullptr;
+
+			try
+			{
+				entity = object->GetMemberRefUnsafe<HRZ2::Ref<HRZ2::RTTIRefObject>>("EntityResource").GetPtr();
+			}
+			catch (const std::exception&)
+			{
+			}
+
+			auto array = ApexComponents(object.GetPtr());
+
+			if (!entity || !array)
+				continue;
+
+			HRZ2::RTTIRefObject *hackable = nullptr;
+			bool apex = false;
+			std::vector<HRZ2::RTTIRefObject *> list;
+
+			for (size_t i = 0; i < array->size(); i++)
+			{
+				auto component = (*array)[i].GetPtr();
+
+				if (!component)
+					continue;
+
+				const auto& type = TypeName(component);
+				bool apexSet = false;
+
+				if (type == "HackableComponentResource")
+				{
+					hackable = component;
+					continue;
+				}
+
+				if (type == "EntityComponentSetResource")
+				{
+					// The Apex variant adds a set with a dealt damage multiplier
+					if (auto set = ApexComponents(component))
+					{
+						for (size_t j = 0; j < set->size() && !apexSet; j++)
+							apexSet = (*set)[j].GetPtr() && TypeName((*set)[j].GetPtr()) == "DamageDealtModifierComponentResource";
+					}
+				}
+
+				apex |= apexSet;
+
+				if (!apexSet)
+					list.push_back(component);
+			}
+
+			std::ranges::sort(list);
+
+			if (hackable)
+				m_ApexDonors[entity].emplace_back(ApexDonor { object.GetPtr(), hackable, std::move(list) });
+			else if (apex)
+				m_ApexRecipients[object.GetPtr()] = ApexRecipient { entity, nullptr, {}, {}, object->m_UUID, std::move(list) };
+		}
+	}
+
+	HandOutApexDonorsLocked();
+}
+
+void ModCoreEvents::HandOutApexDonorsLocked()
+{
+	// Hand out donors to recipients that don't have one
+	for (auto& [setup, recipient] : m_ApexRecipients)
+	{
+		if (recipient.m_Injected)
+			continue;
+
+		auto donors = m_ApexDonors.find(recipient.m_Entity);
+
+		if (donors == m_ApexDonors.end() || donors->second.empty())
+			continue;
+
+		auto array = ApexComponents(setup);
+
+		if (!array)
+			continue;
+
+		// Many machines share one entity resource, and variants of a machine differ in weapons and parts. A donor fits
+		// when the only differences are the per-variant tuning components (damage, loot, description...) plus node
+		// graphs, and Apex-only component sets.
+		const ApexDonor *best = nullptr;
+		size_t bestShared = 0;
+		std::string closestMismatch;
+
+		for (const auto& donor : donors->second)
+		{
+			std::vector<HRZ2::RTTIRefObject *> shared, onlyApex, onlyDonor;
+			std::ranges::set_intersection(recipient.m_Components, donor.m_Components, std::back_inserter(shared));
+			std::ranges::set_difference(recipient.m_Components, donor.m_Components, std::back_inserter(onlyApex));
+			std::ranges::set_difference(donor.m_Components, recipient.m_Components, std::back_inserter(onlyDonor));
+
+			std::string mismatch;
+
+			for (auto object : onlyApex)
+			{
+				const auto& type = TypeName(object);
+
+				if (!IsApexTuningType(type) && type != "NodeGraphComponentResource" && type != "EntityComponentSetResource")
+					mismatch += std::format(" +{}", type);
+			}
+
+			for (auto object : onlyDonor)
+			{
+				const auto& type = TypeName(object);
+
+				if (IsApexTuningType(type) || type == "NodeGraphComponentResource")
+					continue;
+
+				// Sets holding only tuning components, node graphs or the hackable component itself
+				if (type == "EntityComponentSetResource")
+				{
+					bool allowed = true;
+
+					if (auto set = ApexComponents(object))
+					{
+						for (size_t j = 0; j < set->size() && allowed; j++)
+						{
+							auto child = (*set)[j].GetPtr();
+
+							if (!child)
+								continue;
+
+							const auto& childType = TypeName(child);
+							allowed = IsApexTuningType(childType) || childType == "NodeGraphComponentResource" || child == donor.m_Hackable;
+						}
+					}
+
+					if (allowed)
+						continue;
+				}
+
+				mismatch += std::format(" -{}", type);
+			}
+
+			if (!mismatch.empty())
+			{
+				if (closestMismatch.empty() || mismatch.size() < closestMismatch.size())
+					closestMismatch = std::format("{}:{}", donor.m_Setup->m_UUID, mismatch);
+
+				continue;
+			}
+
+			if (!best || shared.size() > bestShared)
+			{
+				best = &donor;
+				bestShared = shared.size();
+			}
+		}
+
+		const auto total = recipient.m_Components.size();
+
+		if (!best)
+		{
+			if (!recipient.m_Reported)
+			{
+				recipient.m_Reported = true;
+				spdlog::info("[apex] {}: no matching donor yet (closest {})", recipient.m_UUID, closestMismatch);
+			}
+
+			continue;
+		}
+
+		// The hackable component comes with a node graph in the regular version (missing from the Apex one), which
+		// among other things registers the machine as the callable mount
+		auto hackable = best->m_Hackable;
+		std::vector<HRZ2::RTTIRefObject *> onlyDonor;
+		std::ranges::set_difference(best->m_Components, recipient.m_Components, std::back_inserter(onlyDonor));
+
+		recipient.m_InjectedAll = { hackable };
+
+		for (auto object : onlyDonor)
+		{
+			if (TypeName(object) == "NodeGraphComponentResource")
+				recipient.m_InjectedAll.push_back(object);
+		}
+
+		for (auto object : recipient.m_InjectedAll)
+			array->push_back(HRZ2::Ref<HRZ2::RTTIRefObject>(object));
+
+		recipient.m_Injected = hackable;
+
+		// Calling the overridden mount spawns the call component's spawn setup that is in the machine's spawn setup
+		// hierarchy. The Apex hierarchy has none of them, so the call falls back to the first one (a Charger or a
+		// Sunwing). Add the ones the donor has, which brings the regular version of the machine when called.
+		try
+		{
+			auto& donorHierarchy = best->m_Setup->GetMemberRefUnsafe<HRZ2::Array<HRZ2::GGUUID>>("SpawnSetupHierarchy");
+			auto& hierarchy = setup->GetMemberRefUnsafe<HRZ2::Array<HRZ2::GGUUID>>("SpawnSetupHierarchy");
+
+			for (size_t i = 0; i < donorHierarchy.size(); i++)
+			{
+				const auto uuid = donorHierarchy[i];
+				bool present = false;
+
+				for (size_t j = 0; j < hierarchy.size(); j++)
+					present |= hierarchy[j] == uuid;
+
+				if (present || !m_CallableMountSetups.contains(uuid))
+					continue;
+
+				hierarchy.push_back(uuid);
+				recipient.m_AddedHierarchy.push_back(uuid);
+				spdlog::info("[apex] {}: callable as {}", recipient.m_UUID, uuid);
+			}
+		}
+		catch (const std::exception& e)
+		{
+			spdlog::error("[apex] {}: {}", recipient.m_UUID, e.what());
+		}
+
+		spdlog::info("[apex] {} can now be overridden (component {} + {} node graphs from {}, {}/{} components shared)", recipient.m_UUID,
+			hackable->m_UUID, recipient.m_InjectedAll.size() - 1, best->m_Setup->m_UUID, bestShared, total);
 	}
 }
 

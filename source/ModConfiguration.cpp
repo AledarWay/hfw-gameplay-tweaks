@@ -153,6 +153,78 @@ namespace InternalModConfig
 
 			PARSE_TOML_MEMBER(gameplay, ForceCustomUltraHard);
 			PARSE_TOML_MEMBER(gameplay, ForceNoShaderLoadingScreen);
+
+			PARSE_TOML_MEMBER(gameplay, KeepSupercellsAfterAether);
+			PARSE_TOML_MEMBER(gameplay, AllowAggressiveFlyingMountOverride);
+			PARSE_TOML_MEMBER(gameplay, CalledFlyingMountFights);
+			PARSE_TOML_MEMBER(gameplay, AllowApexOverride);
+		}
+
+		// [FlyingMountAI]
+		{
+			const auto t = Table["FlyingMountAI"].as_table();
+			auto get = [&](const char *Name, auto Default)
+			{
+				return t ? (*t)[Name].value_or(Default) : Default;
+			};
+
+			auto& f = o.FlyingMountAI;
+			f.Sunwing = get("Sunwing", true);
+			f.Waterwing = get("Waterwing", true);
+			f.SkipIdleInAir = get("SkipIdleInAir", true);
+			f.SkipIdleLanded = get("SkipIdleLanded", true);
+			f.SkipIdleInWater = get("SkipIdleInWater", true);
+			f.SkipGoToHackerLanded = get("SkipGoToHackerLanded", false);
+			f.SkipSwimNearHacker = get("SkipSwimNearHacker", false);
+			f.SkipWholeLandedBranch = get("SkipWholeLandedBranch", false);
+			f.NoLandingNextToTarget = get("NoLandingNextToTarget", true);
+			f.FlyingRangedAttack = get("FlyingRangedAttack", true);
+			f.NoEvadeInWater = get("NoEvadeInWater", true);
+			f.OutOfWaterDelay = get("OutOfWaterDelay", 3.0);
+			f.LookAtThreatSeconds = get("LookAtThreatSeconds", 3.0);
+			f.RangedAttackWindow = get("RangedAttackWindow", 6.0);
+			f.RangedAttackCooldown = get("RangedAttackCooldown", 12.0);
+		}
+
+		// [Supercells]
+		if (auto supercells = Table["Supercells"].as_table())
+		{
+			o.SupercellIncludeAllLocations = (*supercells)["IncludeAllLocations"].value_or(false);
+			o.SupercellIgnoreQuestBlocks = (*supercells)["IgnoreQuestBlocks"].value_or(false);
+			o.SupercellUseCustomLocations = (*supercells)["UseCustomLocations"].value_or(false);
+
+			if (auto a = (*supercells)["DisabledLocations"].as_array())
+			{
+				for (const auto& e : *a)
+				{
+					if (auto v = e.value<int64_t>())
+						o.SupercellDisabledLocations.emplace_back(static_cast<int>(*v));
+				}
+			}
+		}
+
+		// [[SupercellLocation]]
+		if (auto locationArray = Table["SupercellLocation"].as_array())
+		{
+			locationArray->for_each(
+				[&](const toml::table& t)
+				{
+					SupercellLocation l;
+					l.Enabled = t["Enable"].value_or(true);
+					l.X = t["X"].value_or(0.0);
+					l.Y = t["Y"].value_or(0.0);
+
+					if (auto z = t["Z"].value<double>())
+					{
+						l.Z = *z;
+						l.HasZ = true;
+					}
+
+					l.Inner = t["Inner"].value_or(0.0f);
+					l.Outer = t["Outer"].value_or(0.0f);
+					l.Template = t["Template"].value_or(-1);
+					o.SupercellLocations.emplace_back(l);
+				});
 		}
 
 		// [Hotkeys]
