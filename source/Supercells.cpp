@@ -627,8 +627,8 @@ namespace Supercells
 			const auto result = g_OriginalSceneUpdate(A, B, State, InstancePtr, E, F);
 			int after = *reinterpret_cast<int *>(base + StateOffset);
 
-			// The merge quest switches the running container off directly, the fact overrides only cover later loads.
-			// Restart it the way a save load does.
+			// The merge quest switches the running container off from an event, the fact overrides only cover later
+			// loads. State 0 only advances on load, so go straight to choosing a location.
 			if (after == StateDisabled && ModConfiguration.KeepSupercellsAfterAether)
 			{
 				static unsigned long long lastLog = 0;
@@ -639,8 +639,8 @@ namespace Supercells
 					spdlog::info("[supercells] container was disabled (state {} -> {}), restarting it", before, after);
 				}
 
-				*reinterpret_cast<int *>(base + StateOffset) = 0;
-				after = 0;
+				*reinterpret_cast<int *>(base + StateOffset) = StateChoose;
+				after = StateChoose;
 			}
 
 			if (after == StateForming && before != StateForming)
