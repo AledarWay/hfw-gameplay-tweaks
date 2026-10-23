@@ -98,6 +98,23 @@ namespace Supercells
 		using MarkerPositionFn = void *(*)(double *, void *);
 
 		HandlerFn g_OriginalSceneUpdate = nullptr;
+
+		// Container event handlers other than MsgSceneUpdate. The AETHER merge switches the container off from one of
+		// the fact change events, which also stops its scene updates.
+		struct EventHook
+		{
+			const char *m_Name;
+			bool m_BlockWhenKept;
+			HandlerFn m_Original = nullptr;
+			bool m_Logged = false;
+		};
+
+		EventHook g_EventHooks[] = {
+			{ "EntryPoint_SuperCellScriptContainer_eaae50a7816c4b1590d67387535ffbc9_1_HandleEvent_MsgBooleanFactChanged", true },
+			{ "EntryPoint_SuperCellScriptContainer_eaae50a7816c4b1590d67387535ffbc9_2_HandleEvent_MsgEnumFactChanged", true },
+			{ "EntryPoint_SuperCellScriptContainer_eaae50a7816c4b1590d67387535ffbc9_4_HandleEvent_MsgSceneEnterState", false },
+		};
+
 		std::atomic_bool g_Installed = false;
 
 		std::atomic_int g_State = -1;
@@ -625,23 +642,7 @@ namespace Supercells
 			RefreshPlayerOverride();
 
 			const auto result = g_OriginalSceneUpdate(A, B, State, InstancePtr, E, F);
-			int after = *reinterpret_cast<int *>(base + StateOffset);
-
-			// The merge quest switches the running container off from an event, the fact overrides only cover later
-			// loads. State 0 only advances on load, so go straight to choosing a location.
-			if (after == StateDisabled && ModConfiguration.KeepSupercellsAfterAether)
-			{
-				static unsigned long long lastLog = 0;
-
-				if (const auto now = GetTickCount64(); now - lastLog > 10000)
-				{
-					lastLog = now;
-					spdlog::info("[supercells] container was disabled (state {} -> {}), restarting it", before, after);
-				}
-
-				*reinterpret_cast<int *>(base + StateOffset) = StateChoose;
-				after = StateChoose;
-			}
+			const int after = *reinterpret_cast<int *>(base + StateOffset);
 
 			if (after != before && ModConfiguration.TraceSupercells)
 				spdlog::info("[supercells] container state {} -> {}", before, after);
@@ -674,6 +675,38 @@ namespace Supercells
 
 			return result;
 		}
+	}
+
+	namespace
+	{
+		template<size_t I>
+		uint64_t HookEvent(void *A, void *B, void *State, void *InstancePtr, void *E, void *F)
+		{
+			auto& hook = g_EventHooks[I];
+
+			if (hook.m_BlockWhenKept && ModConfiguration.KeepSupercellsAfterAether)
+			{
+				if (!std::exchange(hook.m_Logged, true))
+					spdlog::info("[supercells] blocked {}", hook.m_Name);
+
+				return 0;
+			}
+
+			if (!ModConfiguration.TraceSupercells)
+				return hook.m_Original(A, B, State, InstancePtr, E, F);
+
+			const auto state = reinterpret_cast<int *>(static_cast<uint8_t *>(State) + StateOffset);
+			const int before = *state;
+			const auto result = hook.m_Original(A, B, State, InstancePtr, E, F);
+
+			if (*state != before)
+				spdlog::info("[supercells] container state {} -> {} from {}", before, *state, hook.m_Name);
+
+			return result;
+		}
+
+		constexpr HandlerFn EventDetours[] = { &HookEvent<0>, &HookEvent<1>, &HookEvent<2> };
+		static_assert(std::size(EventDetours) == std::size(g_EventHooks));
 	}
 
 	void Initialize()
@@ -769,6 +802,17 @@ namespace Supercells
 		DetourTransactionBegin();
 		DetourUpdateThread(GetCurrentThread());
 		DetourAttach(reinterpret_cast<void **>(&g_OriginalSceneUpdate), reinterpret_cast<void *>(&HookSceneUpdate));
+
+		for (size_t i = 0; i < std::size(g_EventHooks); i++)
+		{
+			auto& hook = g_EventHooks[i];
+			hook.m_Original = reinterpret_cast<HandlerFn>(FindEntryPoint(hook.m_Name));
+
+			if (hook.m_Original)
+				DetourAttach(reinterpret_cast<void **>(&hook.m_Original), reinterpret_cast<void *>(EventDetours[i]));
+			else
+				spdlog::warn("[supercells] {} not found", hook.m_Name);
+		}
 
 		if (DetourTransactionCommit() != NO_ERROR)
 		{
