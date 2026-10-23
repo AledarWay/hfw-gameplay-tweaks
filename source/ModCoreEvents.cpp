@@ -37,6 +37,8 @@ HRZ2::RTTIObjectTweaker::SetValueVisitor::EMode ModCoreEvents::ValuePatchVisitor
 
 ModCoreEvents::ModCoreEvents()
 {
+	m_ApexOverrideEnabled = ModConfiguration.AllowApexOverride;
+
 	for (const auto& c : ModConfiguration.ComponentInjects)
 	{
 		if (!c.Enabled)
@@ -593,8 +595,7 @@ void ModCoreEvents::OnBeforeUnloadGroup(const HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRe
 	if (!m_RefFindUUIDs.empty())
 		FindReferences(Objects, false);
 
-	if (ModConfiguration.AllowApexOverride)
-		TrackApexSetups(Objects, false);
+	TrackApexSetups(Objects, false);
 
 	for (auto& object : Objects)
 	{
@@ -683,8 +684,7 @@ void ModCoreEvents::OnLoadAssetGroup(const HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRefOb
 	if (!m_RefFindUUIDs.empty())
 		FindReferences(Objects, true);
 
-	if (ModConfiguration.AllowApexOverride)
-		TrackApexSetups(Objects, true);
+	TrackApexSetups(Objects, true);
 }
 
 const std::string& ModCoreEvents::InjectTypeName(const HRZ2::RTTIRefObject *Object)
@@ -721,13 +721,11 @@ static bool IsApexTuningType(const std::string& Type)
 	return types.contains(Type);
 }
 
-void ModCoreEvents::TrackApexSetups(const HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRefObject>>& Objects, bool Loaded)
+namespace
 {
 	using ComponentArray = HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRefObject>>;
 
-	std::scoped_lock lock(m_ApexMutex, m_InjectMutex);
-
-	auto components = [](HRZ2::RTTIRefObject *Setup) -> ComponentArray *
+	ComponentArray *ApexComponents(HRZ2::RTTIRefObject *Setup)
 	{
 		try
 		{
@@ -737,51 +735,56 @@ void ModCoreEvents::TrackApexSetups(const HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRefObj
 		{
 			return nullptr;
 		}
-	};
+	}
+}
 
-	auto removeInjected = [&](HRZ2::RTTIRefObject *Setup, ApexRecipient& Recipient)
+void ModCoreEvents::RemoveApexInjectionLocked(HRZ2::RTTIRefObject *Setup, ApexRecipient& Recipient)
+{
+	if (auto array = ApexComponents(Setup))
 	{
-		if (auto array = components(Setup))
+		for (auto injected : Recipient.m_InjectedAll)
 		{
-			for (auto injected : Recipient.m_InjectedAll)
+			for (size_t i = 0; i < array->size(); i++)
 			{
-				for (size_t i = 0; i < array->size(); i++)
+				if ((*array)[i].GetPtr() == injected)
 				{
-					if ((*array)[i].GetPtr() == injected)
-					{
-						(*array)[i] = (*array)[array->size() - 1];
-						array->pop_back();
-						break;
-					}
+					(*array)[i] = (*array)[array->size() - 1];
+					array->pop_back();
+					break;
 				}
 			}
 		}
+	}
 
-		try
+	try
+	{
+		auto& hierarchy = Setup->GetMemberRefUnsafe<HRZ2::Array<HRZ2::GGUUID>>("SpawnSetupHierarchy");
+
+		for (const auto& uuid : Recipient.m_AddedHierarchy)
 		{
-			auto& hierarchy = Setup->GetMemberRefUnsafe<HRZ2::Array<HRZ2::GGUUID>>("SpawnSetupHierarchy");
-
-			for (const auto& uuid : Recipient.m_AddedHierarchy)
+			for (size_t i = 0; i < hierarchy.size(); i++)
 			{
-				for (size_t i = 0; i < hierarchy.size(); i++)
+				if (hierarchy[i] == uuid)
 				{
-					if (hierarchy[i] == uuid)
-					{
-						hierarchy[i] = hierarchy[hierarchy.size() - 1];
-						hierarchy.pop_back();
-						break;
-					}
+					hierarchy[i] = hierarchy[hierarchy.size() - 1];
+					hierarchy.pop_back();
+					break;
 				}
 			}
 		}
-		catch (const std::exception&)
-		{
-		}
+	}
+	catch (const std::exception&)
+	{
+	}
 
-		Recipient.m_Injected = nullptr;
-		Recipient.m_InjectedAll.clear();
-		Recipient.m_AddedHierarchy.clear();
-	};
+	Recipient.m_Injected = nullptr;
+	Recipient.m_InjectedAll.clear();
+	Recipient.m_AddedHierarchy.clear();
+}
+
+void ModCoreEvents::TrackApexSetups(const HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRefObject>>& Objects, bool Loaded)
+{
+	std::scoped_lock lock(m_ApexMutex, m_InjectMutex);
 
 	if (!Loaded)
 	{
@@ -830,7 +833,7 @@ void ModCoreEvents::TrackApexSetups(const HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRefObj
 
 				if (partUnloading || (lostHackables.contains(recipient.m_Injected) && !stillDonated))
 				{
-					removeInjected(setup, recipient);
+					RemoveApexInjectionLocked(setup, recipient);
 					spdlog::info("[apex] removed override from {} (donor unloading)", recipient.m_UUID);
 				}
 			}
@@ -878,7 +881,7 @@ void ModCoreEvents::TrackApexSetups(const HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRefObj
 			{
 			}
 
-			auto array = components(object.GetPtr());
+			auto array = ApexComponents(object.GetPtr());
 
 			if (!entity || !array)
 				continue;
@@ -906,7 +909,7 @@ void ModCoreEvents::TrackApexSetups(const HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRefObj
 				if (type == "EntityComponentSetResource")
 				{
 					// The Apex variant adds a set with a dealt damage multiplier
-					if (auto set = components(component))
+					if (auto set = ApexComponents(component))
 					{
 						for (size_t j = 0; j < set->size() && !apexSet; j++)
 							apexSet = (*set)[j].GetPtr() && InjectTypeName((*set)[j].GetPtr()) == "DamageDealtModifierComponentResource";
@@ -923,9 +926,29 @@ void ModCoreEvents::TrackApexSetups(const HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRefObj
 
 			if (hackable)
 				m_ApexDonors[entity].emplace_back(ApexDonor { object.GetPtr(), hackable, std::move(list) });
-			else if (apex || ModConfiguration.ApexOverrideAllVariants)
+			else if (apex)
 				m_ApexRecipients[object.GetPtr()] = ApexRecipient { entity, nullptr, {}, {}, object->m_UUID, std::move(list) };
 		}
+	}
+
+	HandOutApexDonorsLocked();
+}
+
+void ModCoreEvents::HandOutApexDonorsLocked()
+{
+	// Experimental, can be toggled at runtime
+	if (!m_ApexOverrideEnabled)
+	{
+		for (auto& [setup, recipient] : m_ApexRecipients)
+		{
+			if (recipient.m_Injected)
+			{
+				RemoveApexInjectionLocked(setup, recipient);
+				spdlog::info("[apex] removed override from {} (disabled)", recipient.m_UUID);
+			}
+		}
+
+		return;
 	}
 
 	// Hand out donors to recipients that don't have one
@@ -939,7 +962,7 @@ void ModCoreEvents::TrackApexSetups(const HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRefObj
 		if (donors == m_ApexDonors.end() || donors->second.empty())
 			continue;
 
-		auto array = components(setup);
+		auto array = ApexComponents(setup);
 
 		if (!array)
 			continue;
@@ -983,7 +1006,7 @@ void ModCoreEvents::TrackApexSetups(const HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRefObj
 				{
 					bool allowed = true;
 
-					if (auto set = components(object))
+					if (auto set = ApexComponents(object))
 					{
 						for (size_t j = 0; j < set->size() && allowed; j++)
 						{
@@ -1089,6 +1112,23 @@ void ModCoreEvents::TrackApexSetups(const HRZ2::Array<HRZ2::Ref<HRZ2::RTTIRefObj
 		spdlog::info("[apex] {} can now be overridden (component {} + {} node graphs from {}, {}/{} components shared)", recipient.m_UUID,
 			hackable->m_UUID, recipient.m_InjectedAll.size() - 1, best->m_Setup->m_UUID, bestShared, total);
 	}
+}
+
+void ModCoreEvents::SetApexOverrideEnabled(bool Enabled)
+{
+	std::scoped_lock lock(m_ApexMutex, m_InjectMutex);
+
+	if (m_ApexOverrideEnabled == Enabled)
+		return;
+
+	m_ApexOverrideEnabled = Enabled;
+	spdlog::info("[apex] override {}", Enabled ? "enabled" : "disabled");
+	HandOutApexDonorsLocked();
+}
+
+bool ModCoreEvents::IsApexOverrideEnabled() const
+{
+	return m_ApexOverrideEnabled;
 }
 
 void ModCoreEvents::LogApexCandidates(const ApexRecipient& Recipient, const std::vector<ApexDonor>& Donors)

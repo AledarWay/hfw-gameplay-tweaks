@@ -109,7 +109,6 @@ namespace InternalModConfig
 		bool AllowAggressiveFlyingMountOverride;
 		bool CalledFlyingMountFights;
 		bool AllowApexOverride;
-		bool ApexOverrideAllVariants;
 		bool ApexOverrideDebug;
 
 		// [FlyingMountAI]
