@@ -1291,6 +1291,14 @@ namespace HRZ2::GraphRuntime
 				g_TagEntryCount[t] += entries;
 
 				spdlog::info("[graph] watching '{}' at {:#x}-{:#x} ({} entry points)", g_Tags[t], begin - g_Base, end - g_Base, entries);
+
+				for (const auto& entry : program->m_EntryPoints)
+				{
+					const std::string_view name(entry.m_EntryPoint.c_str());
+
+					if (name.find(g_Tags[t]) != std::string_view::npos && g_Exports.contains(Murmur3(name, 42)))
+						spdlog::info("[graph]   entry point {}", name);
+				}
 			}
 		}
 

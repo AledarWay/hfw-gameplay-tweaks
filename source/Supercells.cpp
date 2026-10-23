@@ -643,6 +643,9 @@ namespace Supercells
 				after = StateChoose;
 			}
 
+			if (after != before && ModConfiguration.TraceSupercells)
+				spdlog::info("[supercells] container state {} -> {}", before, after);
+
 			if (after == StateForming && before != StateForming)
 				OnLocationChosen(instance);
 
