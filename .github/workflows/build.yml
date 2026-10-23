@@ -1,0 +1,40 @@
+name: Build
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-2022
+    env:
+      VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+    steps:
+      - uses: actions/checkout@v4
+
+      # Full clone: vcpkg.json pins a builtin-baseline commit
+      - name: Bootstrap vcpkg
+        run: |
+          git clone https://github.com/microsoft/vcpkg "$env:VCPKG_ROOT"
+          & "$env:VCPKG_ROOT/bootstrap-vcpkg.bat" -disableMetrics
+
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Configure
+        run: cmake --preset final-universal
+
+      - name: Build
+        run: cmake --build --preset final-universal-release
+
+      - name: Collect
+        run: |
+          New-Item -ItemType Directory out | Out-Null
+          Get-ChildItem bin -Recurse -Filter winhttp.dll | Where-Object { $_.FullName -match 'Release' } | Select-Object -First 1 | Copy-Item -Destination out
+          Copy-Item resources/mod_config.ini out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hfw-gameplay-tweaks-dump
+          path: out/
