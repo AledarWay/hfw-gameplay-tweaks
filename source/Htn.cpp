@@ -738,14 +738,14 @@ namespace Htn
 			state.m_Dispatch = reinterpret_cast<DispatchFn>(dispatch);
 			state.m_Behave = reinterpret_cast<BehaveFn>(behave);
 
-			DetourTransactionBegin();
+			const auto begin = DetourTransactionBegin();
 			DetourUpdateThread(GetCurrentThread());
-			DetourAttach(reinterpret_cast<void **>(&state.m_Dispatch), reinterpret_cast<void *>(&HookDispatch<D>));
-			DetourAttach(reinterpret_cast<void **>(&state.m_Behave), reinterpret_cast<void *>(&HookBehave<D>));
+			const auto attach1 = DetourAttach(reinterpret_cast<void **>(&state.m_Dispatch), reinterpret_cast<void *>(&HookDispatch<D>));
+			const auto attach2 = DetourAttach(reinterpret_cast<void **>(&state.m_Behave), reinterpret_cast<void *>(&HookBehave<D>));
 
-			if (DetourTransactionCommit() != NO_ERROR)
+			if (const auto commit = DetourTransactionCommit(); commit != NO_ERROR)
 			{
-				spdlog::error("[htn] failed to hook the {} domain", info.m_Name);
+				spdlog::error("[htn] failed to hook the {} domain (begin {}, attach {}/{}, commit {})", info.m_Name, begin, attach1, attach2, commit);
 				return;
 			}
 

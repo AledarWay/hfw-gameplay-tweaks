@@ -799,9 +799,9 @@ namespace Supercells
 
 		g_OriginalSceneUpdate = reinterpret_cast<HandlerFn>(target);
 
-		DetourTransactionBegin();
+		const auto begin = DetourTransactionBegin();
 		DetourUpdateThread(GetCurrentThread());
-		DetourAttach(reinterpret_cast<void **>(&g_OriginalSceneUpdate), reinterpret_cast<void *>(&HookSceneUpdate));
+		const auto attach = DetourAttach(reinterpret_cast<void **>(&g_OriginalSceneUpdate), reinterpret_cast<void *>(&HookSceneUpdate));
 
 		for (size_t i = 0; i < std::size(g_EventHooks); i++)
 		{
@@ -814,10 +814,11 @@ namespace Supercells
 				spdlog::warn("[supercells] {} not found", hook.m_Name);
 		}
 
-		if (DetourTransactionCommit() != NO_ERROR)
+		if (const auto commit = DetourTransactionCommit(); commit != NO_ERROR)
 		{
+			spdlog::error("[supercells] failed to hook the container update (begin {}, attach {}, commit {}, target {:#x})", begin, attach, commit,
+				reinterpret_cast<uintptr_t>(target) - reinterpret_cast<uintptr_t>(GetModuleHandleW(L"fullgame.dll")));
 			g_OriginalSceneUpdate = nullptr;
-			spdlog::error("[supercells] failed to hook the container update");
 		}
 	}
 
